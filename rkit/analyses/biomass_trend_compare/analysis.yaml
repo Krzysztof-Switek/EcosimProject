@@ -1,0 +1,13 @@
+id: biomass_trend_compare
+name: "Porównanie trendów biomasy"
+description: >
+  Porównuje trendy biomasy wybranych grup funkcyjnych między scenariuszami,
+  z opcjonalnym wygładzaniem i normalizacją względem roku bazowego.
+requires:
+  domain: timeseries
+  variables: [biomass]
+  dims: [scenario, group]
+params:
+  - { key: smoothing, type: number, default: 3,     label: "Wygładzanie (lata)" }
+  - { key: relative,  type: bool,   default: false, label: "Względem roku bazowego" }
+entry: entry.R
