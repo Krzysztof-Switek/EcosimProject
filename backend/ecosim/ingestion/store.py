@@ -20,7 +20,7 @@ def _coerce(df: pd.DataFrame) -> pd.DataFrame:
     for col in ("year", "month", "group_id", "fleet_id", "partner_id"):
         df[col] = df[col].astype("Int32")
     df["value"] = pd.to_numeric(df["value"], errors="coerce").astype("float64")
-    for col in ("scenario", "domain", "variable", "freq", "date",
+    for col in ("model", "model_name", "scenario", "domain", "variable", "freq", "date",
                 "group_name", "fleet_name", "partner_name", "unit"):
         df[col] = df[col].astype("string")
     return df

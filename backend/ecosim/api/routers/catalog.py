@@ -9,6 +9,12 @@ from ecosim.catalog import service
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 
 
+@router.get("/models")
+def models() -> list[dict]:
+    """Ecopath models (step 1) with the Ecosim scenarios under each (step 2)."""
+    return service.list_models()
+
+
 @router.get("/scenarios")
 def scenarios() -> list[dict]:
     return service.list_scenarios()

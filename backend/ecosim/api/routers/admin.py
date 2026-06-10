@@ -21,6 +21,7 @@ def reload_data() -> dict:
     report = run_ingest(get_settings())
     return {
         "status": "ok",
+        "models": [m["id"] for m in report.models],
         "scenarios": [s["id"] for s in report.scenarios],
         "datasets": report.datasets_written,
         "rows": report.rows_written,

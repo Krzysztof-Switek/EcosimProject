@@ -4,9 +4,25 @@ export interface ScenarioSummary {
   scenario: string; // slug id
   label: string | null; // authoritative EcosimScenario name (output)
   domain: string;
+  model: string | null; // parent Ecopath model id (null for input drivers)
+  model_name: string | null;
   n_datasets: number;
   year_min: number;
   year_max: number;
+}
+
+export interface ScenarioRef {
+  scenario: string; // slug id
+  label: string; // EcosimScenario name
+}
+
+export interface ModelSummary {
+  model: string; // Ecopath model id (slug of ModelName)
+  model_name: string; // authoritative ModelName label
+  scenarios: ScenarioRef[]; // Ecosim scenarios run under this model
+  year_min: number;
+  year_max: number;
+  n_datasets: number;
 }
 
 export interface VariableEntry {
@@ -28,6 +44,8 @@ export interface DomainNode {
 
 export interface ScenarioTreeNode {
   scenario: string;
+  model: string | null; // parent Ecopath model id (null for input drivers)
+  model_name: string | null;
   domains: DomainNode[];
 }
 
@@ -38,6 +56,8 @@ export interface DimItem {
 }
 
 export interface TimeseriesRow {
+  model: string | null;
+  model_name: string | null;
   scenario: string;
   variable: string;
   freq: string;

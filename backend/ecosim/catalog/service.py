@@ -34,17 +34,59 @@ def list_scenarios(settings: Settings | None = None) -> list[dict]:
             con,
             """
             SELECT cd.scenario,
-                   any_value(s.label)   AS label,
-                   any_value(cd.domain) AS domain,
-                   count(*)             AS n_datasets,
-                   min(cd.year_min)     AS year_min,
-                   max(cd.year_max)     AS year_max
+                   any_value(s.label)      AS label,
+                   any_value(cd.domain)    AS domain,
+                   any_value(cd.model)     AS model,
+                   any_value(cd.model_name) AS model_name,
+                   count(*)                AS n_datasets,
+                   min(cd.year_min)        AS year_min,
+                   max(cd.year_max)        AS year_max
             FROM catalog_datasets cd
             LEFT JOIN dim_scenarios s ON cd.scenario = s.id
             GROUP BY cd.scenario
             ORDER BY cd.scenario
             """,
         )
+
+
+def list_models(settings: Settings | None = None) -> list[dict]:
+    """Ecopath models (output only) with the Ecosim scenarios that belong to each.
+
+    This is the top of the navigation hierarchy: step 1 picks models, step 2
+    picks scenarios from within those models. Input drivers have no model and
+    are excluded here.
+    """
+    settings = settings or get_settings()
+    with _ro(settings) as con:
+        rows = _rows(
+            con,
+            """
+            SELECT cd.model,
+                   any_value(cd.model_name) AS model_name,
+                   cd.scenario,
+                   any_value(s.label)       AS scenario_label,
+                   min(cd.year_min)         AS year_min,
+                   max(cd.year_max)         AS year_max,
+                   count(*)                 AS n_datasets
+            FROM catalog_datasets cd
+            LEFT JOIN dim_scenarios s ON cd.scenario = s.id
+            WHERE cd.domain = 'output' AND cd.model IS NOT NULL
+            GROUP BY cd.model, cd.scenario
+            ORDER BY cd.model, cd.scenario
+            """,
+        )
+    models: dict[str, dict] = {}
+    for r in rows:
+        m = models.setdefault(r["model"], {
+            "model": r["model"], "model_name": r["model_name"],
+            "scenarios": [], "year_min": r["year_min"], "year_max": r["year_max"],
+            "n_datasets": 0,
+        })
+        m["scenarios"].append({"scenario": r["scenario"], "label": r["scenario_label"] or r["scenario"]})
+        m["year_min"] = min(m["year_min"], r["year_min"])
+        m["year_max"] = max(m["year_max"], r["year_max"])
+        m["n_datasets"] += r["n_datasets"]
+    return list(models.values())
 
 
 def list_datasets(settings: Settings | None = None, *, scenario: str | None = None) -> list[dict]:
@@ -60,12 +102,22 @@ def list_datasets(settings: Settings | None = None, *, scenario: str | None = No
 
 
 def get_scenario_tree(settings: Settings | None = None) -> list[dict]:
-    """Nested navigation tree: scenario -> domain -> [variables]."""
+    """Nested navigation tree: (model, scenario) -> domain -> [variables].
+
+    Each scenario node carries its parent Ecopath ``model``/``model_name`` (null
+    for input drivers) so the UI can group scenarios by model and know, per
+    variable, which (model, scenario) series are available.
+    """
     settings = settings or get_settings()
     datasets = list_datasets(settings)
     tree: dict[str, dict] = {}
     for ds in datasets:
-        scn = tree.setdefault(ds["scenario"], {"scenario": ds["scenario"], "domains": {}})
+        scn = tree.setdefault(ds["scenario"], {
+            "scenario": ds["scenario"],
+            "model": ds.get("model"),
+            "model_name": ds.get("model_name"),
+            "domains": {},
+        })
         dom = scn["domains"].setdefault(ds["domain"], {"domain": ds["domain"], "variables": []})
         dom["variables"].append({
             "variable": ds["variable"], "freq": ds["freq"], "label": ds["label"],
@@ -74,7 +126,10 @@ def get_scenario_tree(settings: Settings | None = None) -> list[dict]:
             "n_groups": ds["n_groups"], "n_fleets": ds["n_fleets"], "n_partners": ds["n_partners"],
         })
     return [
-        {"scenario": s["scenario"], "domains": list(s["domains"].values())}
+        {
+            "scenario": s["scenario"], "model": s["model"], "model_name": s["model_name"],
+            "domains": list(s["domains"].values()),
+        }
         for s in tree.values()
     ]
 
@@ -94,6 +149,7 @@ def list_fleets(settings: Settings | None = None) -> list[dict]:
 def query_timeseries(
     settings: Settings | None = None,
     *,
+    model: list[str] | None = None,
     scenario: list[str] | None = None,
     variable: str,
     freq: str = "annual",
@@ -101,11 +157,21 @@ def query_timeseries(
     fleet: list[str] | None = None,
     year_from: int | None = None,
     year_to: int | None = None,
+    month_from: int | None = None,
+    month_to: int | None = None,
 ) -> list[dict]:
-    """Return tidy rows for charting. ``group``/``fleet`` match names case-insensitively."""
+    """Return tidy rows for charting. ``group``/``fleet`` match names case-insensitively.
+
+    Range filtering: ``year_from``/``year_to`` bound by calendar year; for monthly
+    data ``month_from``/``month_to`` additionally bound by month-of-year (1–12),
+    so a seasonal subset (e.g. June–August across all years) can be selected.
+    """
     settings = settings or get_settings()
     clauses = ["variable = ?", "freq = ?"]
     params: list = [variable, freq]
+    if model:
+        clauses.append(f"model IN ({_placeholders(model)})")
+        params += model
     if scenario:
         clauses.append(f"scenario IN ({_placeholders(scenario)})")
         params += scenario
@@ -121,11 +187,17 @@ def query_timeseries(
     if year_to is not None:
         clauses.append("year <= ?")
         params.append(year_to)
+    if month_from is not None:
+        clauses.append("month >= ?")
+        params.append(month_from)
+    if month_to is not None:
+        clauses.append("month <= ?")
+        params.append(month_to)
     sql = (
-        "SELECT scenario, variable, freq, date, year, month, "
+        "SELECT model, model_name, scenario, variable, freq, date, year, month, "
         "group_id, group_name, fleet_id, fleet_name, partner_id, partner_name, value "
         "FROM timeseries WHERE " + " AND ".join(clauses) +
-        " ORDER BY scenario, group_name, fleet_name, partner_name, year, month"
+        " ORDER BY model, scenario, group_name, fleet_name, partner_name, year, month"
     )
     with _ro(settings) as con:
         return _rows(con, sql, params)

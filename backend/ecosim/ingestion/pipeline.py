@@ -25,6 +25,7 @@ from ecosim.ingestion.store import write_dataset
 @dataclass
 class IngestReport:
     scenarios: list[dict] = field(default_factory=list)
+    models: list[dict] = field(default_factory=list)
     datasets_written: int = 0
     rows_written: int = 0
     files_read: int = 0
@@ -38,16 +39,27 @@ def _find_group_map(raw_dir: Path) -> Path:
     return candidates[0]
 
 
-def _discover_output(raw_dir: Path) -> list[tuple[str, str, Path]]:
-    """Return (scenario_id, label, ecosim_dir) for each output scenario.
+@dataclass
+class OutputRun:
+    model_id: str
+    model_label: str
+    scenario_id: str
+    scenario_label: str
+    ecosim_dir: Path
 
-    The authoritative scenario name is the ``EcosimScenario`` field from the CSV
-    ``"<HEADER ecosim/>"`` block (the official EwE name). The id is its slug; the
-    label is the raw value. One parent folder may hold several runs (e.g.
-    ``Baltic_Ecosim`` and ``baseline cumulative``) — distinct scenarios that must
-    not be merged. Falls back to the directory name if the header is missing.
+
+def _discover_output(raw_dir: Path) -> list[OutputRun]:
+    """Discover each output run as an (Ecopath model, Ecosim scenario) pair.
+
+    Two authoritative header fields define the navigation hierarchy:
+    ``ModelName`` from ``"<HEADER ecopath/>"`` is the Ecopath model, and
+    ``EcosimScenario`` from ``"<HEADER ecosim/>"`` is the scenario run under it.
+    One parent folder may hold several runs (e.g. ``Baltic_Ecosim`` and
+    ``baseline cumulative`` under the same model) — distinct scenarios that must
+    not be merged. Each id is the slug of its label; both fall back to the
+    directory name when the header is missing.
     """
-    out: list[tuple[str, str, Path]] = []
+    out: list[OutputRun] = []
     output_root = raw_dir / "output"
     if not output_root.exists():
         return out
@@ -55,10 +67,18 @@ def _discover_output(raw_dir: Path) -> list[tuple[str, str, Path]]:
         ecosim_dirs = [d for d in top.rglob("ecosim_*") if d.is_dir() and any(d.glob("*.csv"))]
         for ecosim_dir in ecosim_dirs:
             csvs = sorted(ecosim_dir.glob("*.csv"))
-            name = read_header(csvs[0]).get("EcosimScenario") if csvs else None
-            if not name:
-                name = ecosim_dir.name[len("ecosim_"):] if ecosim_dir.name.startswith("ecosim_") else ecosim_dir.name
-            out.append((slugify(name), name, ecosim_dir))
+            header = read_header(csvs[0]) if csvs else {}
+            scenario_label = header.get("EcosimScenario") or (
+                ecosim_dir.name[len("ecosim_"):] if ecosim_dir.name.startswith("ecosim_") else ecosim_dir.name
+            )
+            model_label = header.get("ModelName") or top.name
+            out.append(OutputRun(
+                model_id=slugify(model_label),
+                model_label=model_label,
+                scenario_id=slugify(scenario_label),
+                scenario_label=scenario_label,
+                ecosim_dir=ecosim_dir,
+            ))
     return out
 
 
@@ -84,25 +104,40 @@ def run_ingest(settings: Settings | None = None) -> IngestReport:
     _export_dictionaries(dicts, settings.dictionaries_dir)
 
     seen_scenarios: dict[str, dict] = {}
+    seen_models: dict[str, dict] = {}
 
     # Group raw sources by scenario so we can ingest one scenario at a time and
     # flush its datasets before moving on (bounds peak memory). Multi-file
     # variables (e.g. all predation_* targets) are concatenated per scenario.
+    # Each output scenario also carries its parent Ecopath model.
     output_by_scenario: dict[str, list[Path]] = defaultdict(list)
-    for scenario_id, label, ecosim_dir in _discover_output(settings.raw_dir):
-        seen_scenarios.setdefault(scenario_id, {"id": scenario_id, "label": label, "domain": "output"})
-        output_by_scenario[scenario_id].extend(sorted(ecosim_dir.glob("*.csv")))
+    output_model: dict[str, tuple[str, str]] = {}  # scenario_id -> (model_id, model_label)
+    for run in _discover_output(settings.raw_dir):
+        seen_models.setdefault(run.model_id, {"id": run.model_id, "name": run.model_label})
+        seen_scenarios.setdefault(run.scenario_id, {
+            "id": run.scenario_id, "label": run.scenario_label, "domain": "output",
+            "model": run.model_id, "model_name": run.model_label,
+        })
+        output_model[run.scenario_id] = (run.model_id, run.model_label)
+        output_by_scenario[run.scenario_id].extend(sorted(run.ecosim_dir.glob("*.csv")))
 
     input_by_scenario: dict[str, list[tuple[str, Path]]] = defaultdict(list)
     for scenario_id, driver, trend_path in _discover_input(settings.raw_dir):
-        seen_scenarios.setdefault(scenario_id, {"id": scenario_id, "label": scenario_id.upper(), "domain": "input"})
+        seen_scenarios.setdefault(scenario_id, {
+            "id": scenario_id, "label": scenario_id.upper(), "domain": "input",
+            "model": None, "model_name": None,
+        })
         input_by_scenario[scenario_id].append((driver, trend_path))
 
     for scenario_id, csv_paths in output_by_scenario.items():
+        model_id, model_label = output_model[scenario_id]
         buckets: dict[tuple, list[pd.DataFrame]] = defaultdict(list)
         for csv_path in csv_paths:
             try:
-                meta, df = parse_ecosim_csv(csv_path, dicts, scenario=scenario_id)
+                meta, df = parse_ecosim_csv(
+                    csv_path, dicts, scenario=scenario_id,
+                    model=model_id, model_name=model_label,
+                )
                 report.files_read += 1
                 if not df.empty:
                     buckets[(meta.variable, meta.freq)].append(df)
@@ -123,7 +158,9 @@ def run_ingest(settings: Settings | None = None) -> IngestReport:
         _flush(buckets, settings, report)
 
     report.scenarios = list(seen_scenarios.values())
+    report.models = list(seen_models.values())
     _export_scenarios(report.scenarios, settings.dictionaries_dir)
+    _export_models(report.models, settings.dictionaries_dir)
 
     # Build the catalog last, from the freshly written Parquet store.
     from ecosim.catalog.build import build_catalog
@@ -151,3 +188,10 @@ def _export_dictionaries(dicts: Dictionaries, out_dir: Path) -> None:
 def _export_scenarios(scenarios: list[dict], out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(scenarios).to_csv(out_dir / "scenarios.csv", index=False)
+
+
+def _export_models(models: list[dict], out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cols = ["id", "name"]
+    df = pd.DataFrame(models, columns=cols) if models else pd.DataFrame(columns=cols)
+    df.to_csv(out_dir / "models.csv", index=False)

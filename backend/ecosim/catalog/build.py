@@ -28,6 +28,8 @@ def build_catalog(settings: Settings | None = None) -> None:
             WITH agg AS (
                 SELECT
                     scenario,
+                    any_value(model)           AS model,
+                    any_value(model_name)      AS model_name,
                     domain,
                     variable,
                     freq,
@@ -49,6 +51,7 @@ def build_catalog(settings: Settings | None = None) -> None:
         _load_dim(con, "dim_groups", dict_dir / "groups.csv")
         _load_dim(con, "dim_fleets", dict_dir / "fleets.csv")
         _load_dim(con, "dim_scenarios", dict_dir / "scenarios.csv")
+        _load_dim(con, "dim_models", dict_dir / "models.csv")
     finally:
         con.close()
 

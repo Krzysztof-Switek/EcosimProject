@@ -23,7 +23,10 @@ const PALETTE = [
  * Pivot tidy rows into Recharts-ready data. A series is the combination of the
  * dimensions that actually vary (scenario and/or group), so labels stay terse.
  */
-export function buildChartModel(rows: TimeseriesRow[]): ChartModel {
+export function buildChartModel(
+  rows: TimeseriesRow[],
+  scenarioLabel: (scenario: string) => string = (s) => s,
+): ChartModel {
   const xField: "year" | "date" =
     rows.length > 0 && rows[0].freq === "monthly" ? "date" : "year";
 
@@ -34,9 +37,9 @@ export function buildChartModel(rows: TimeseriesRow[]): ChartModel {
 
   const seriesKey = (r: TimeseriesRow): string => {
     const parts: string[] = [];
-    if (multiScenario) parts.push(r.scenario);
+    if (multiScenario) parts.push(scenarioLabel(r.scenario));
     if (multiGroup && r.group_name) parts.push(r.group_name);
-    if (parts.length === 0) parts.push(r.group_name ?? r.scenario);
+    if (parts.length === 0) parts.push(r.group_name ?? scenarioLabel(r.scenario));
     return parts.join(" · ");
   };
 

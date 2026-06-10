@@ -128,6 +128,8 @@ def parse_ecosim_csv(
     dicts: Dictionaries,
     *,
     scenario: str,
+    model: str | None = None,
+    model_name: str | None = None,
     domain: str = "output",
 ) -> tuple[EcosimCsvMeta, pd.DataFrame]:
     rows = _read_rows(path)
@@ -135,6 +137,11 @@ def parse_ecosim_csv(
     data_label, hdr_idx = _find_data_section(rows, after_header)
     variable, freq, target = _variable_and_target(path)
     start_year = int(headers.get("StartYear", _DEFAULT_START_YEAR))
+    # Fall back to the authoritative Ecopath ModelName from the header block.
+    if model_name is None:
+        model_name = headers.get("ModelName")
+    if model is None and model_name:
+        model = slugify(model_name)
     meta = EcosimCsvMeta(
         variable=variable, freq=freq, start_year=start_year,
         data_label=data_label, target_group=target, headers=headers,
@@ -155,6 +162,8 @@ def parse_ecosim_csv(
     else:
         raise ValueError(f"Unrecognised Ecosim CSV layout in {path.name}: header={header_row[:5]}")
 
+    df["model"] = model
+    df["model_name"] = model_name
     df["scenario"] = scenario
     df["domain"] = domain
     df["variable"] = variable

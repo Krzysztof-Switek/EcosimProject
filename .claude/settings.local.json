@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(npm run *)",
+      "PowerShell(Stop-Process *)",
+      "PowerShell($env:PYTHONPATH=\"backend\"; .\\\\.venv\\\\Scripts\\\\python.exe -m ecosim.cli ingest)",
+      "PowerShell($env:PYTHONPATH=\"backend\"; .\\\\.venv\\\\Scripts\\\\python.exe _verify.py)",
+      "PowerShell(Remove-Item *)",
+      "PowerShell($env:PYTHONPATH=\"backend\"; .\\\\.venv\\\\Scripts\\\\python.exe -m ecosim.cli serve --port 8000)",
+      "Bash(curl -s http://127.0.0.1:8000/catalog/models)",
+      "Bash(curl -s http://127.0.0.1:8000/catalog/tree)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d[0]['domains'][0]['variables'][:1], indent=2\\)\\); print\\('node keys:', list\\(d[0].keys\\(\\)\\), '| model=', d[0]['model']\\)\")",
+      "Bash(curl -s \"http://127.0.0.1:8000/timeseries?variable=biomass&freq=annual&model=baltic_sea_new&group=Cod%20adult&year_from=1998&year_to=1999\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('count:', d['count']\\); [print\\(' ', r['model'], r['scenario'], r['year'], round\\(r['value'],4\\)\\) for r in d['rows']]\")",
+      "Bash(curl -s -o /dev/null -w \"frontend HTTP %{http_code}\\\\n\" http://localhost:5173/)",
+      "Bash(curl -s -o /dev/null -w \"backend  HTTP %{http_code}\\\\n\" http://127.0.0.1:8000/health)",
+      "PowerShell(Get-CimInstance *)",
+      "Bash(curl -s \"http://127.0.0.1:8000/timeseries?variable=biomass&freq=monthly&model=baltic_sea_new&scenario=baltic_ecosim&group=Cod%20adult&date_from=2000-06-01&date_to=2000-08-01\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('count:', d['count']\\); [print\\(' ', r['date'], round\\(r['value'],4\\)\\) for r in d['rows']]\")",
+      "PowerShell($env:PYTHONPATH=\"C:\\\\Users\\\\kswitek\\\\Documents\\\\EcosimProject\\\\backend\"; & \"C:\\\\Users\\\\kswitek\\\\Documents\\\\EcosimProject\\\\.venv\\\\Scripts\\\\python.exe\" -m ecosim.cli serve --port 8000)",
+      "Bash(curl -s -o /dev/null -w \"backend HTTP %{http_code}\\\\n\" http://127.0.0.1:8000/health)",
+      "Bash(npx --no-install playwright --version)",
+      "Bash(where chrome *)",
+      "Read(//c/Program Files/Google/Chrome/Application/**)",
+      "Read(//c/Program Files \\(x86\\)/Microsoft/Edge/Application/**)",
+      "PowerShell(npm install *)"
+    ]
+  }
+}

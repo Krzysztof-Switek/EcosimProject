@@ -4,16 +4,23 @@ import type { VariableEntry } from "../../api/types";
 import { ComparisonChart } from "./ComparisonChart";
 import { buildChartModel } from "./transform";
 
+export interface Range {
+  year_from?: number;
+  year_to?: number;
+  month_from?: number;
+  month_to?: number;
+}
+
 interface Props {
   variable: string;
   freq: "annual" | "monthly";
   entry: VariableEntry;
   label: string;
   scenarios: string[];
+  scenarioLabel: (scenario: string) => string;
   groups: string[];
   fleets: string[];
-  yearFrom: number;
-  yearTo: number;
+  range: Range;
   onRemove: () => void;
 }
 
@@ -28,10 +35,10 @@ export function VariableChart({
   entry,
   label,
   scenarios,
+  scenarioLabel,
   groups,
   fleets,
-  yearFrom,
-  yearTo,
+  range,
   onRemove,
 }: Props) {
   const hasGroups = entry.n_groups > 0;
@@ -47,11 +54,11 @@ export function VariableChart({
             scenario: scenarios,
             group: hasGroups ? groups : undefined,
             fleet: hasFleets ? fleets : undefined,
-            year_from: yearFrom,
-            year_to: yearTo,
+            ...range,
           })
         : Promise.resolve({ count: 0, variable, freq, rows: [] }),
-    [variable, freq, scenarios, groups, fleets, yearFrom, yearTo, ready],
+    [variable, freq, scenarios, groups, fleets,
+     range.year_from, range.year_to, range.month_from, range.month_to, ready],
   );
 
   const rows = data?.rows ?? [];
@@ -71,7 +78,7 @@ export function VariableChart({
       {!error && loading && <div className="muted pad">Loading…</div>}
       {!error && !loading && !ready && (
         <div className="muted pad">
-          Select scenarios{hasGroups ? " and groups" : ""} to plot this variable.
+          Pick models/scenarios{hasGroups ? " and groups" : ""} to plot this variable.
         </div>
       )}
       {!error && !loading && ready && rows.length === 0 && (
@@ -79,7 +86,7 @@ export function VariableChart({
       )}
       {!error && !loading && ready && rows.length > 0 && (
         <ComparisonChart
-          model={buildChartModel(rows)}
+          model={buildChartModel(rows, scenarioLabel)}
           yLabel={entry.label ?? variable}
           height={260}
         />

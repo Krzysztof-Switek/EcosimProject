@@ -13,7 +13,9 @@ import pyarrow as pa
 
 # Ordered list of canonical columns for the tidy time-series table.
 TIMESERIES_COLUMNS: list[str] = [
-    "scenario",       # canonical scenario id, e.g. "baseline_cumulative"
+    "model",          # Ecopath model id (slug of ModelName); null for input drivers
+    "model_name",     # authoritative Ecopath ModelName label; null for input drivers
+    "scenario",       # canonical scenario id (slug of EcosimScenario), e.g. "baltic_ecosim"
     "domain",         # "output" | "input"
     "variable",       # canonical slug, e.g. "biomass", "catch_fleet_group", "predation"
     "freq",           # "annual" | "monthly"
@@ -34,6 +36,8 @@ TIMESERIES_COLUMNS: list[str] = [
 # a particular slice has all-null dimension columns.
 TIMESERIES_ARROW_SCHEMA = pa.schema(
     [
+        ("model", pa.string()),
+        ("model_name", pa.string()),
         ("scenario", pa.string()),
         ("domain", pa.string()),
         ("variable", pa.string()),
