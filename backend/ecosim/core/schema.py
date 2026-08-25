@@ -57,6 +57,32 @@ TIMESERIES_ARROW_SCHEMA = pa.schema(
 )
 
 
+# One row per known raster. Building this index only touches filenames + one
+# RunInfo header per scenario folder (grid geometry is constant per model, not
+# per file) -- no per-file I/O, no rasterio. The actual Cloud-Optimized GeoTIFF
+# is materialized lazily (see ingestion.spatial_pipeline.materialize_raster) on
+# first request and cached at ``path``; until then only ``source_path`` (the
+# raw .asc) exists. A materialized COG carries its own georeferencing, so
+# geo metadata (bounds/cellsize/crs) is read from the file when needed rather
+# than duplicated here. ``group_*``/``fleet_*`` are the same entity dimension
+# as the tidy schema (mutually exclusive here: a raster has at most one).
+RASTER_INDEX_COLUMNS: list[str] = [
+    "id",             # stable slug: scenario|domain|variable|entity_slug|year
+    "model",          # Ecopath model id; null for input drivers
+    "model_name",
+    "scenario",       # canonical scenario id, matches the timeseries store
+    "domain",         # "output" | "input"
+    "variable",       # biomass, catch, discards, effort, habitat_capacity, or driver slug
+    "group_id",
+    "group_name",
+    "fleet_id",
+    "fleet_name",
+    "year",
+    "path",           # target COG path, relative to the spatial store root (data/spatial/)
+    "source_path",    # raw .asc path, relative to raw_dir (DataEcosim/) -- needed to materialize
+]
+
+
 def slugify(text: str) -> str:
     """Lower-case, ascii-friendly slug used for scenario/variable identifiers."""
     text = text.strip().lower()

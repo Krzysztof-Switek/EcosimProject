@@ -4,10 +4,17 @@ import { useAsync } from "./api/useAsync";
 import { buildVariableIndex, type VariableKey } from "./features/catalog/catalogIndex";
 import { Sidebar } from "./features/catalog/Sidebar";
 import { AnalysisView } from "./features/timeseries/AnalysisView";
+import { Landing } from "./features/home/Landing";
+import { SpatialView } from "./features/spatial/SpatialView";
 
 const varId = (v: { domain: string; variable: string }) => `${v.domain}|${v.variable}`;
 
+type Module = "spatial" | "timeseries";
+
 export default function App() {
+  // Top-level choice made on the landing screen: which module the user is in.
+  const [module, setModule] = useState<Module | null>(null);
+
   // Theme (persisted); applied as data-theme on <html> for the CSS variables.
   const [theme, setTheme] = useState<"light" | "dark">(
     () => (localStorage.getItem("theme") as "light" | "dark") || "light",
@@ -16,6 +23,15 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("theme", theme);
   }, [theme]);
+  const themeToggle = (
+    <button
+      className="btn btn--ghost"
+      onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+      title="Toggle dark mode"
+    >
+      {theme === "dark" ? "☀ Light" : "🌙 Dark"}
+    </button>
+  );
 
   // Bumping this token re-runs every catalog fetch (used after a data reload).
   const [reloadToken, setReloadToken] = useState(0);
@@ -190,22 +206,56 @@ export default function App() {
   const loading = tree.loading || models.loading || groups.loading || fleets.loading;
   const error = tree.error || models.error || groups.error || fleets.error;
 
+  const homeBtn = (
+    <button className="btn btn--ghost" onClick={() => setModule(null)} title="Back to start">
+      ← Home
+    </button>
+  );
+
+  if (module === null) {
+    return (
+      <div className="app">
+        <header className="app__bar">
+          <span className="app__brand">Ecosim · Results Explorer</span>
+          <div className="app__bar-right">{themeToggle}</div>
+        </header>
+        <Landing onSelect={setModule} />
+      </div>
+    );
+  }
+
+  if (module === "spatial") {
+    return (
+      <div className="app">
+        <header className="app__bar">
+          <div className="app__bar-left">
+            {homeBtn}
+            <span className="app__brand">Spatial data</span>
+          </div>
+          <div className="app__bar-right">{themeToggle}</div>
+        </header>
+        <div className="app__body">
+          <main className="app__main">
+            <SpatialView groups={groups.data ?? []} fleets={fleets.data ?? []} />
+          </main>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <header className="app__bar">
-        <span className="app__brand">Ecosim · Results Explorer</span>
+        <div className="app__bar-left">
+          {homeBtn}
+          <span className="app__brand">Ecosim · Results Explorer</span>
+        </div>
         <div className="app__bar-right">
           {reloadMsg && <span className="muted">{reloadMsg}</span>}
           <span className="muted">
             {models.data?.length ?? 0} models · {variables.length} variables
           </span>
-          <button
-            className="btn btn--ghost"
-            onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-            title="Toggle dark mode"
-          >
-            {theme === "dark" ? "☀ Light" : "🌙 Dark"}
-          </button>
+          {themeToggle}
           <button className="btn" onClick={reloadData} disabled={reloading}>
             {reloading ? "Reloading…" : "Reload Data"}
           </button>

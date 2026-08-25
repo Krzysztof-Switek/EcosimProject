@@ -52,6 +52,7 @@ def build_catalog(settings: Settings | None = None) -> None:
         _load_dim(con, "dim_fleets", dict_dir / "fleets.csv")
         _load_dim(con, "dim_scenarios", dict_dir / "scenarios.csv")
         _load_dim(con, "dim_models", dict_dir / "models.csv")
+        _load_dim(con, "catalog_rasters", settings.spatial_dir / "raster_index.csv")
     finally:
         con.close()
 

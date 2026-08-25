@@ -1,6 +1,8 @@
 import type {
   DimItem,
   ModelSummary,
+  RasterEntry,
+  RasterLayer,
   ScenarioSummary,
   ScenarioTreeNode,
   TimeseriesResponse,
@@ -67,4 +69,13 @@ export const api = {
     if (params.month_to != null) q.set("month_to", String(params.month_to));
     return getJson<TimeseriesResponse>(`/timeseries?${q.toString()}`);
   },
+
+  spatialLayers: () => getJson<RasterLayer[]>("/spatial/layers"),
+
+  spatialRasters: (params: { scenario: string; variable: string }) => {
+    const q = new URLSearchParams({ scenario: params.scenario, variable: params.variable });
+    return getJson<RasterEntry[]>(`/spatial/rasters?${q.toString()}`);
+  },
+
+  spatialRasterUrl: (id: string) => `${BASE}/spatial/raster/${encodeURIComponent(id)}`,
 };

@@ -32,6 +32,34 @@ def ingest() -> None:
 
 
 @app.command()
+def ingest_spatial() -> None:
+    """Index DataEcosim/ .asc maps (fast) and rebuild the catalog.
+
+    Only discovers rasters and records where their raw source lives -- it
+    does not convert anything, so it runs in well under a minute even for
+    ~13k files. Individual rasters are converted to COGs lazily, on first
+    request, via GET /spatial/raster/{id}. Safe to re-run after new raw
+    scenarios arrive.
+    """
+    from ecosim.ingestion.spatial_pipeline import build_raster_index
+
+    settings = get_settings()
+    typer.echo(f"Raw source : {settings.raw_dir}")
+    typer.echo(f"Spatial store : {settings.spatial_dir}")
+    report = build_raster_index(settings)
+    typer.echo(f"Done. files_seen={report.files_seen} indexed={report.rasters_indexed}")
+    if report.errors:
+        typer.echo(f"\n{len(report.errors)} file(s) skipped with errors:")
+        for err in report.errors[:20]:
+            typer.echo(f"  ! {err}")
+
+    from ecosim.catalog.build import build_catalog
+
+    build_catalog(settings)
+    typer.echo("Catalog rebuilt.")
+
+
+@app.command()
 def catalog() -> None:
     """Rebuild only the DuckDB catalog from the existing Parquet store."""
     from ecosim.catalog.build import build_catalog

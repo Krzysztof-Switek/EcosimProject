@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from ecosim import __version__
-from ecosim.api.routers import admin, catalog, timeseries
+from ecosim.api.routers import admin, catalog, spatial, timeseries
 
 
 def create_app() -> FastAPI:
@@ -30,6 +30,7 @@ def create_app() -> FastAPI:
     app.include_router(catalog.router)
     app.include_router(catalog.dict_router)
     app.include_router(timeseries.router)
+    app.include_router(spatial.router)
     app.include_router(admin.router)
     return app
 

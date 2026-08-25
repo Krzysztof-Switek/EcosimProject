@@ -37,6 +37,12 @@ class Dictionaries:
         row = self.groups.loc[self.groups["slug"] == target, "id"]
         return None if row.empty else int(row.iloc[0])
 
+    def fleet_id_by_name(self, name: str) -> int | None:
+        """Resolve a fleet id from a (possibly differently-cased) name."""
+        target = slugify(name)
+        row = self.fleets.loc[self.fleets["slug"] == target, "id"]
+        return None if row.empty else int(row.iloc[0])
+
 
 def _read_sheet(path: Path, sheet: str, name_col_candidates: tuple[str, ...]) -> pd.DataFrame:
     raw = pd.read_excel(path, sheet_name=sheet)

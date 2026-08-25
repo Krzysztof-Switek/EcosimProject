@@ -79,3 +79,30 @@ export interface TimeseriesResponse {
   freq: string;
   rows: TimeseriesRow[];
 }
+
+export interface RasterLayer {
+  scenario: string;
+  model: string | null;
+  model_name: string | null;
+  domain: string; // "output" | "input"
+  variable: string;
+  n_groups: number;
+  n_fleets: number;
+  year_min: number;
+  year_max: number;
+  n_rasters: number;
+}
+
+export interface RasterEntry {
+  id: string; // "scenario|domain|variable|entity_slug|year" -- opaque, pass to the raster endpoint
+  model: string | null;
+  model_name: string | null;
+  scenario: string;
+  domain: string;
+  variable: string;
+  group_id: number | null;
+  group_name: string | null;
+  fleet_id: number | null;
+  fleet_name: string | null;
+  year: number;
+}

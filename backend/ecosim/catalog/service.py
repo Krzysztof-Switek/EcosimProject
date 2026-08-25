@@ -203,5 +203,64 @@ def query_timeseries(
         return _rows(con, sql, params)
 
 
+def list_raster_layers(settings: Settings | None = None) -> list[dict]:
+    """Spatial layers available per (model, scenario): one row per variable.
+
+    Mirrors :func:`get_scenario_tree` but for the raster store — the index the
+    UI browses before picking a year to render.
+    """
+    settings = settings or get_settings()
+    with _ro(settings) as con:
+        return _rows(
+            con,
+            """
+            SELECT scenario, any_value(model) AS model, any_value(model_name) AS model_name,
+                   domain, variable,
+                   count(DISTINCT group_id) AS n_groups, count(DISTINCT fleet_id) AS n_fleets,
+                   min(year) AS year_min, max(year) AS year_max, count(*) AS n_rasters
+            FROM catalog_rasters
+            GROUP BY scenario, domain, variable
+            ORDER BY scenario, domain, variable
+            """,
+        )
+
+
+def list_rasters(
+    settings: Settings | None = None,
+    *,
+    scenario: str,
+    variable: str,
+    group: str | None = None,
+    fleet: str | None = None,
+    year: int | None = None,
+) -> list[dict]:
+    """Raster index rows for one (scenario, variable), optionally narrowed further."""
+    settings = settings or get_settings()
+    clauses = ["scenario = ?", "variable = ?"]
+    params: list = [scenario, variable]
+    if group:
+        clauses.append("lower(group_name) = ?")
+        params.append(group.lower())
+    if fleet:
+        clauses.append("lower(fleet_name) = ?")
+        params.append(fleet.lower())
+    if year is not None:
+        clauses.append("year = ?")
+        params.append(year)
+    with _ro(settings) as con:
+        return _rows(
+            con,
+            "SELECT * FROM catalog_rasters WHERE " + " AND ".join(clauses) + " ORDER BY year",
+            params,
+        )
+
+
+def get_raster(raster_id: str, settings: Settings | None = None) -> dict | None:
+    settings = settings or get_settings()
+    with _ro(settings) as con:
+        rows = _rows(con, "SELECT * FROM catalog_rasters WHERE id = ?", [raster_id])
+    return rows[0] if rows else None
+
+
 def _placeholders(values: list) -> str:
     return ", ".join("?" for _ in values)
