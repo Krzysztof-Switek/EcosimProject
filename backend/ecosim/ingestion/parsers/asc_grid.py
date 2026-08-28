@@ -11,9 +11,11 @@ Two raw shapes, both plain ESRI ASCII grids read via ``rasterio``:
 * **input** ``<code>_<year>.asc`` under an ``input/<scenario>/<driver>/`` folder
   — one map per year, no group/fleet dimension.
 
-Geo-reference (WGS84, confirmed by ``CoordinateSystemWKT`` in each run's
-``Ecospace RunInfo.txt``) is not embedded in the raw ``.asc`` files themselves,
-so it is attached when converting to the canonical Cloud-Optimized GeoTIFF.
+Geo-reference (WGS84) is not embedded in the raw ``.asc`` files themselves, so
+it is attached when converting to the canonical Cloud-Optimized GeoTIFF --
+:func:`write_cog` checks this assumption against each run's own
+``CoordinateSystemWKT`` (from ``Ecospace RunInfo.txt``) when it's known,
+rather than assuming it silently. See docs/ewe-data-formats.md.
 """
 
 from __future__ import annotations
@@ -74,8 +76,15 @@ def parse_input_filename(name: str, *, driver: str) -> AscGridMeta | None:
                         entity_name=None, year=int(m.group(0)))
 
 
-def write_cog(src_path: Path, out_path: Path) -> dict:
+def write_cog(src_path: Path, out_path: Path, *, source_crs_wkt: str | None = None) -> dict:
     """Convert one ``.asc`` grid to a WGS84 Cloud-Optimized GeoTIFF.
+
+    ``source_crs_wkt`` is the ``CoordinateSystemWKT`` this raster's Ecospace
+    ``RunInfo.txt`` reported, if known -- verified against our hardcoded WGS84
+    assumption before stamping it, since Ecospace can also run in a local
+    UTM/metres "Assume Square Cells" mode that this pipeline does not support
+    (see docs/ewe-data-formats.md). Pass ``None`` (e.g. input driver grids,
+    which have no RunInfo.txt) to skip the check and keep today's behaviour.
 
     Returns raster metadata (width/height/cellsize/bounds) for the raster index.
     Requires the ``spatial`` extra (``rasterio``), imported lazily so the rest of
@@ -83,6 +92,21 @@ def write_cog(src_path: Path, out_path: Path) -> dict:
     """
     import rasterio
     from rasterio.crs import CRS
+
+    if source_crs_wkt:
+        # EwE's own RunInfo.txt export quotes WKT string literals with ' rather
+        # than the " standard OGC WKT requires (confirmed against a real file:
+        # rasterio's parser rejects it as-is, "OGR Error code 5") -- normalize
+        # before parsing.
+        reported = CRS.from_wkt(source_crs_wkt.replace("'", '"'))
+        if reported.to_epsg() != 4326:
+            raise ValueError(
+                f"{src_path.name}: source Ecospace RunInfo.txt reports CRS "
+                f"{reported.to_string()!r} (EPSG:{reported.to_epsg()}), not WGS84/EPSG:4326 -- "
+                "likely built with Ecospace's 'Assume Square Cells' (local UTM/metres) mode, "
+                "which this pipeline does not support. Converting it as WGS84 would silently "
+                "mis-georeference it."
+            )
 
     with rasterio.open(src_path) as src:
         data = src.read(1)

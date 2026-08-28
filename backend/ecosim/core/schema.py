@@ -79,7 +79,10 @@ RASTER_INDEX_COLUMNS: list[str] = [
     "fleet_name",
     "year",
     "path",           # target COG path, relative to the spatial store root (data/spatial/)
-    "source_path",    # raw .asc path, relative to raw_dir (DataEcosim/) -- needed to materialize
+    "source_path",    # absolute raw .asc path -- needed to materialize on demand
+    "source_crs_wkt",  # CoordinateSystemWKT from this scenario's Ecospace RunInfo.txt, if any --
+                        # checked against our hardcoded WGS84 assumption at materialize time
+                        # (see asc_grid.write_cog); null for input drivers, which have no RunInfo.txt
 ]
 
 

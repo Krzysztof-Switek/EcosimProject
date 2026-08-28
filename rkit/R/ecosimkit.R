@@ -21,7 +21,7 @@ ecosim_load_timeseries <- function() {
   }
   csv <- sub("\\.parquet$", ".csv", path)
   if (file.exists(csv)) return(utils::read.csv(csv, check.names = FALSE))
-  stop("Brak pakietu 'arrow' i pliku CSV fallback: ", path)
+  stop("Package 'arrow' is not installed and no CSV fallback exists at: ", path)
 }
 
 #' Wczytaj słownik: "groups" | "fleets" | "scenarios".

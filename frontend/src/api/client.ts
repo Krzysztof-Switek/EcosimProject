@@ -1,8 +1,13 @@
 import type {
+  AnalysisSpec,
+  BrowseResult,
+  DataSource,
+  DataSourceKind,
   DimItem,
   ModelSummary,
   RasterEntry,
   RasterLayer,
+  RunAnalysisResponse,
   ScenarioSummary,
   ScenarioTreeNode,
   TimeseriesResponse,
@@ -18,21 +23,34 @@ async function getJson<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-async function postJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { method: "POST" });
+async function postJson<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    ...(body !== undefined
+      ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+      : {}),
+  });
   if (!res.ok) {
-    throw new Error(`${res.status} ${res.statusText} — ${path}`);
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.detail ?? `${res.status} ${res.statusText} — ${path}`);
   }
   return res.json() as Promise<T>;
 }
 
 export interface ReloadResult {
   status: string;
+  // Only present on POST /admin/sources/{id}/activate, not on the generic
+  // /admin/reload (which just re-scans whatever is already active).
+  source_id?: string;
+  models: string[];
   scenarios: string[];
   datasets: number;
   rows: number;
   files_read: number;
   errors: number;
+  rasters_indexed: number;
+  spatial_errors: number;
+  group_dictionary_found: boolean;
 }
 
 export const api = {
@@ -43,6 +61,15 @@ export const api = {
   fleets: () => getJson<DimItem[]>("/dictionaries/fleets"),
 
   reload: () => postJson<ReloadResult>("/admin/reload"),
+
+  sources: (kind?: DataSourceKind) => getJson<DataSource[]>(`/admin/sources${kind ? `?kind=${kind}` : ""}`),
+  addSource: (name: string, path: string, kind: DataSourceKind) =>
+    postJson<DataSource>("/admin/sources", { name, path, kind }),
+  activateSource: (id: string) => postJson<ReloadResult>(`/admin/sources/${encodeURIComponent(id)}/activate`),
+  browse: (path?: string) => {
+    const q = path ? `?path=${encodeURIComponent(path)}` : "";
+    return getJson<BrowseResult>(`/admin/browse${q}`);
+  },
 
   timeseries: (params: {
     variable: string;
@@ -78,4 +105,33 @@ export const api = {
   },
 
   spatialRasterUrl: (id: string) => `${BASE}/spatial/raster/${encodeURIComponent(id)}`,
+
+  /** All registered analyses, or (with `variableNames`) only ones compatible
+   * with that selection -- e.g. what's currently picked in a basket. */
+  analyses: (variableNames?: string[]) => {
+    const q = new URLSearchParams();
+    variableNames?.forEach((v) => q.append("variable", v));
+    const qs = q.toString();
+    return getJson<AnalysisSpec[]>(`/analyses${qs ? `?${qs}` : ""}`);
+  },
+
+  runAnalysis: (id: string, body: { manifest: Record<string, unknown>; params: Record<string, unknown> }) =>
+    postJson<RunAnalysisResponse>(`/analyses/${encodeURIComponent(id)}/run`, body),
+
+  artifactUrl: (jobId: string, path: string) =>
+    `${BASE}/analyses/jobs/${encodeURIComponent(jobId)}/artifact/${path}`,
+
+  /** Download exactly what a manifest selects as a CSV file -- no analysis, no R. */
+  exportData: async (manifest: Record<string, unknown>): Promise<Response> => {
+    const res = await fetch(`${BASE}/analyses/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ manifest }),
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null);
+      throw new Error(detail?.detail ?? `${res.status} ${res.statusText} — export`);
+    }
+    return res;
+  },
 };

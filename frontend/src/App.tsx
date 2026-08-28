@@ -6,10 +6,12 @@ import { Sidebar } from "./features/catalog/Sidebar";
 import { AnalysisView } from "./features/timeseries/AnalysisView";
 import { Landing } from "./features/home/Landing";
 import { SpatialView } from "./features/spatial/SpatialView";
+import { MonteCarloView } from "./features/montecarlo/MonteCarloView";
+import { DataSourcePanel } from "./features/datasource/DataSourcePanel";
 
 const varId = (v: { domain: string; variable: string }) => `${v.domain}|${v.variable}`;
 
-type Module = "spatial" | "timeseries";
+type Module = "spatial" | "timeseries" | "montecarlo";
 
 export default function App() {
   // Top-level choice made on the landing screen: which module the user is in.
@@ -33,10 +35,36 @@ export default function App() {
     </button>
   );
 
+  // Which folders the app reads EwE model output/input data from -- see
+  // features/datasource/DataSourcePanel.tsx. Output is mandatory (models/
+  // scenarios/groups all derive from it) and gates the "Explore" tiles on
+  // Landing; input is optional. Neither blocks the whole app the way a
+  // single combined source used to -- Landing's row 1 is always reachable
+  // so a fresh install can point at data without anything else pretending
+  // to work first.
+  const [sourceToken, setSourceToken] = useState(0);
+  const [sourcePanelKind, setSourcePanelKind] = useState<"output" | "input" | null>(null);
+  const sources = useAsync(() => api.sources(), [sourceToken]);
+  const activeOutput = sources.data?.find((s) => s.kind === "output" && s.active) ?? null;
+  const activeInput = sources.data?.find((s) => s.kind === "input" && s.active) ?? null;
+
   // Bumping this token re-runs every catalog fetch (used after a data reload).
   const [reloadToken, setReloadToken] = useState(0);
   const [reloading, setReloading] = useState(false);
   const [reloadMsg, setReloadMsg] = useState<string | null>(null);
+
+  const onSourceActivated = () => {
+    setSourcePanelKind(null);
+    setSourceToken((t) => t + 1);
+    setReloadToken((t) => t + 1);
+  };
+
+  const dataSourceReadout = (
+    <span className="muted app__sourcereadout">
+      📤 {activeOutput?.name ?? "—"}
+      {activeInput && ` · 📥 ${activeInput.name}`}
+    </span>
+  );
 
   const models = useAsync(() => api.models(), [reloadToken]);
   const tree = useAsync(() => api.tree(), [reloadToken]);
@@ -182,12 +210,16 @@ export default function App() {
       )
       .map((c) => c.scenario);
 
-  // Effective (plotted) series: nothing by default — the user explicitly picks
-  // in the step-5 picker. An override is kept only for currently-available ids.
+  // Effective (plotted) series: the full pool chosen in steps 1–2 by default --
+  // picking a variable should show what you already selected upstream, not
+  // demand a third, seemingly-duplicate confirmation. The per-variable picker
+  // (docked "Models & scenarios" panel) is an *override* for the rarer case of
+  // wanting a different subset for one specific variable; an override is kept
+  // only for currently-available ids (dropped if steps 1–2 later narrow the pool).
   const effectiveScenarios = (v: VariableKey): string[] => {
-    const avail = new Set(availableScenarios(v));
+    const avail = availableScenarios(v);
     const override = perVarScenarios[varId(v)];
-    return override ? override.filter((s) => avail.has(s)) : [];
+    return override ? override.filter((s) => avail.includes(s)) : avail;
   };
 
   // Level-0 split: only variables of the active frequency are navigable.
@@ -212,14 +244,63 @@ export default function App() {
     </button>
   );
 
-  if (module === null) {
+  if (sources.loading) {
     return (
       <div className="app">
         <header className="app__bar">
           <span className="app__brand">Ecosim · Results Explorer</span>
           <div className="app__bar-right">{themeToggle}</div>
         </header>
-        <Landing onSelect={setModule} />
+        <div className="muted pad">Loading…</div>
+      </div>
+    );
+  }
+
+  if (sources.error) {
+    return (
+      <div className="app">
+        <header className="app__bar">
+          <span className="app__brand">Ecosim · Results Explorer</span>
+          <div className="app__bar-right">{themeToggle}</div>
+        </header>
+        <div className="error pad">Cannot reach API: {sources.error}</div>
+      </div>
+    );
+  }
+
+  if (sourcePanelKind !== null) {
+    return (
+      <div className="app">
+        <header className="app__bar">
+          <div className="app__bar-left">
+            <button className="btn btn--ghost" onClick={() => setSourcePanelKind(null)} title="Back">
+              ← Back
+            </button>
+            <span className="app__brand">Ecosim · Results Explorer</span>
+          </div>
+          <div className="app__bar-right">{themeToggle}</div>
+        </header>
+        <DataSourcePanel kind={sourcePanelKind} onActivated={onSourceActivated} />
+      </div>
+    );
+  }
+
+  // No active output source yet, or the user hasn't picked a module: both
+  // land on Landing, whose row 1 (data) is always reachable and row 2
+  // (explore) is disabled until output is set -- see Landing.tsx.
+  if (module === null || activeOutput === null) {
+    return (
+      <div className="app">
+        <header className="app__bar">
+          <span className="app__brand">Ecosim · Results Explorer</span>
+          <div className="app__bar-right">{themeToggle}</div>
+        </header>
+        <Landing
+          onSelect={setModule}
+          onOpenSource={setSourcePanelKind}
+          activeOutput={activeOutput}
+          activeInput={activeInput}
+        />
       </div>
     );
   }
@@ -232,11 +313,36 @@ export default function App() {
             {homeBtn}
             <span className="app__brand">Spatial data</span>
           </div>
-          <div className="app__bar-right">{themeToggle}</div>
+          <div className="app__bar-right">
+            {dataSourceReadout}
+            {themeToggle}
+          </div>
         </header>
         <div className="app__body">
           <main className="app__main">
             <SpatialView groups={groups.data ?? []} fleets={fleets.data ?? []} />
+          </main>
+        </div>
+      </div>
+    );
+  }
+
+  if (module === "montecarlo") {
+    return (
+      <div className="app">
+        <header className="app__bar">
+          <div className="app__bar-left">
+            {homeBtn}
+            <span className="app__brand">Monte Carlo</span>
+          </div>
+          <div className="app__bar-right">
+            {dataSourceReadout}
+            {themeToggle}
+          </div>
+        </header>
+        <div className="app__body">
+          <main className="app__main">
+            <MonteCarloView />
           </main>
         </div>
       </div>
@@ -255,6 +361,7 @@ export default function App() {
           <span className="muted">
             {models.data?.length ?? 0} models · {variables.length} variables
           </span>
+          {dataSourceReadout}
           {themeToggle}
           <button className="btn" onClick={reloadData} disabled={reloading}>
             {reloading ? "Reloading…" : "Reload Data"}

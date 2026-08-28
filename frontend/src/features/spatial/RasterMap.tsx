@@ -72,8 +72,10 @@ function projectToPixel(
   return [x, frac * (height - 1)];
 }
 
-/** Trace every ring of every Polygon/MultiPolygon feature into the current canvas path. */
-function traceAoiPath(ctx: CanvasRenderingContext2D, aoi: GeoJSON.FeatureCollection, georaster: GeoRaster): boolean {
+/** Trace every ring of every Polygon/MultiPolygon feature of every selected area into the
+ * current canvas path -- one shared subpath per ring, so a later ctx.clip() (nonzero winding)
+ * masks to the union of all of them, disjoint or not. */
+function traceAoiPath(ctx: CanvasRenderingContext2D, aois: GeoJSON.FeatureCollection[], georaster: GeoRaster): boolean {
   const { xmin, ymin, ymax, pixelWidth, height } = georaster;
   let any = false;
   const traceRing = (ring: number[][]) => {
@@ -86,10 +88,12 @@ function traceAoiPath(ctx: CanvasRenderingContext2D, aoi: GeoJSON.FeatureCollect
     ctx.closePath();
   };
   ctx.beginPath();
-  for (const feature of aoi.features) {
-    const g = feature.geometry;
-    if (g.type === "Polygon") g.coordinates.forEach(traceRing);
-    else if (g.type === "MultiPolygon") g.coordinates.forEach((poly) => poly.forEach(traceRing));
+  for (const aoi of aois) {
+    for (const feature of aoi.features) {
+      const g = feature.geometry;
+      if (g.type === "Polygon") g.coordinates.forEach(traceRing);
+      else if (g.type === "MultiPolygon") g.coordinates.forEach((poly) => poly.forEach(traceRing));
+    }
   }
   return any;
 }
@@ -101,7 +105,7 @@ function traceAoiPath(ctx: CanvasRenderingContext2D, aoi: GeoJSON.FeatureCollect
  */
 function renderRaster(
   georaster: GeoRaster,
-  aoi: GeoJSON.FeatureCollection | null,
+  aois: GeoJSON.FeatureCollection[],
   palette: PaletteId,
   invert: boolean,
   domainOverride: RasterStats | null,
@@ -150,9 +154,9 @@ function renderRaster(
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d")!;
-  if (aoi) {
+  if (aois.length > 0) {
     ctx.save();
-    if (traceAoiPath(ctx, aoi, georaster)) ctx.clip();
+    if (traceAoiPath(ctx, aois, georaster)) ctx.clip();
     ctx.drawImage(dataCanvas, 0, 0);
     ctx.restore();
   } else {
@@ -162,13 +166,17 @@ function renderRaster(
   return { url: canvas.toDataURL(), min, max, dataMin, dataMax };
 }
 
+/** A small, fixed rotation of outline colors so multiple simultaneously-selected
+ * areas stay visually distinguishable on the map -- independent of the data
+ * color palette, which is a different concern (magnitude, not identity). */
+const AOI_OUTLINE_COLORS = ["#eb6834", "#2f6fed", "#1fa87a", "#c23fd0", "#c2a83f", "#e0475b"];
+
 export function RasterMap({
   rasterUrl,
   prefetchUrl,
   onStats,
-  activeAoi,
+  selectedAois,
   onAoiDrawn,
-  onAoiCleared,
   palette,
   invert,
   domainOverride,
@@ -177,12 +185,11 @@ export function RasterMap({
   /** Fetched+parsed into the cache in the background, without touching the visible layer. */
   prefetchUrl?: string | null;
   onStats: (stats: (RasterStats & { dataMin: number; dataMax: number }) | null) => void;
-  /** The currently-active saved area (from the parent's named-area library), or null for none. */
-  activeAoi: GeoJSON.FeatureCollection | null;
-  /** A new shape was drawn on the map -- parent should create + activate a named entry for it. */
+  /** Every area currently checked in the parent's named-area library -- the map shows the
+   * outline of each and clips the raster to their union (empty array = full map). */
+  selectedAois: { id: string; name: string; geojson: GeoJSON.FeatureCollection }[];
+  /** A new shape was drawn on the map -- parent should create + select a named entry for it. */
   onAoiDrawn: (geojson: GeoJSON.FeatureCollection) => void;
-  /** The active shape was deleted via the map's own toolbar -- parent should just deactivate it. */
-  onAoiCleared: () => void;
   palette: PaletteId;
   invert: boolean;
   /** Manual color-scale domain; null means auto (scale to this raster's own min/max). */
@@ -193,7 +200,7 @@ export function RasterMap({
   const overlayRef = useRef<L.ImageOverlay | null>(null);
   const fittedRef = useRef(false);
   const drawnItemsRef = useRef<L.FeatureGroup | null>(null);
-  const suppressNextAoiSyncRef = useRef(false);
+  const displayLayerRef = useRef<L.LayerGroup | null>(null);
   // Parsed rasters are immutable once fetched (raw .asc is immutable, and the
   // materialized COG never changes) -- cache them so revisiting a year
   // (autoplay loop, slider scrub back and forth) is instant, no refetch/reparse.
@@ -211,7 +218,11 @@ export function RasterMap({
       maxZoom: 12,
     }).addTo(map);
 
-    const drawnItems = new L.FeatureGroup().addTo(map);
+    // Scratch group only -- used to build GeoJSON from a freshly-drawn shape
+    // (.toGeoJSON()), then cleared immediately. Never added to the map: the
+    // persistent, possibly-multi-shape display is displayLayer below, driven
+    // by the parent's selection state, not by leaflet-draw's own bookkeeping.
+    const drawnItems = new L.FeatureGroup();
     drawnItemsRef.current = drawnItems;
     const drawControl = new L.Control.Draw({
       position: "topright",
@@ -226,26 +237,25 @@ export function RasterMap({
         marker: false,
         polyline: false,
       },
-      // Delete-only: reshape handles (the "squares at the corners") add a
-      // second, confusing way to change the area -- redraw or upload instead.
-      edit: { featureGroup: drawnItems, edit: false },
+      // No edit toolbar: reshape handles were confusing, and deleting a saved
+      // area is a sidebar action (checkbox list below) now that several can
+      // be shown/selected at once -- a map-side delete tool would only ever
+      // have the current in-progress shape to act on.
     });
     map.addControl(drawControl);
 
+    const displayLayer = new L.LayerGroup().addTo(map);
+    displayLayerRef.current = displayLayer;
+
     map.on(L.Draw.Event.CREATED, (e) => {
-      drawnItems.clearLayers(); // the map only ever shows the active area
       const layer = (e as L.DrawEvents.Created).layer;
       drawnItems.addLayer(layer);
-      suppressNextAoiSyncRef.current = true;
-      // A freshly-drawn shape is a *new* named area, not an edit of the
-      // active one -- the parent creates + activates a library entry for it.
+      // A freshly-drawn shape is a *new* named area -- the parent creates it
+      // and adds it to the selection; this map draws it via displayLayer once
+      // that selection comes back down as a prop, so the scratch group can be
+      // cleared right away.
       onAoiDrawn(drawnItems.toGeoJSON() as GeoJSON.FeatureCollection);
-    });
-    map.on(L.Draw.Event.DELETED, () => {
-      // Map-toolbar delete only deactivates (unclips the view); the named
-      // library entry itself is managed from the sidebar list.
-      suppressNextAoiSyncRef.current = true;
-      onAoiCleared();
+      drawnItems.clearLayers();
     });
 
     mapRef.current = map;
@@ -253,25 +263,27 @@ export function RasterMap({
       map.remove();
       mapRef.current = null;
       drawnItemsRef.current = null;
+      displayLayerRef.current = null;
       overlayRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keep the editable layer group in sync with the active area whenever it
-  // changes for a reason other than this map's own draw/delete handlers
-  // (switching which saved area is active, an upload, load from storage) --
-  // skip the round-trip when the change was just emitted by those handlers.
+  // Keep the display layer in sync with whichever areas are currently
+  // selected -- each gets its own outline color (cycled) plus a name tooltip,
+  // so multiple simultaneously-shown areas stay distinguishable.
   useEffect(() => {
-    const drawnItems = drawnItemsRef.current;
-    if (!drawnItems) return;
-    if (suppressNextAoiSyncRef.current) {
-      suppressNextAoiSyncRef.current = false;
-      return;
-    }
-    drawnItems.clearLayers();
-    if (activeAoi) L.geoJSON(activeAoi).eachLayer((l) => drawnItems.addLayer(l));
-  }, [activeAoi]);
+    const displayLayer = displayLayerRef.current;
+    if (!displayLayer) return;
+    displayLayer.clearLayers();
+    selectedAois.forEach((aoi, i) => {
+      L.geoJSON(aoi.geojson, {
+        style: { color: AOI_OUTLINE_COLORS[i % AOI_OUTLINE_COLORS.length], weight: 2, fillOpacity: 0 },
+      })
+        .bindTooltip(aoi.name, { sticky: true })
+        .addTo(displayLayer);
+    });
+  }, [selectedAois]);
 
   // Fetch + parse the raster whenever the target URL changes (cached after first view).
   useEffect(() => {
@@ -357,7 +369,8 @@ export function RasterMap({
       return;
     }
 
-    const { url, min, max, dataMin, dataMax } = renderRaster(georaster, activeAoi, palette, invert, domainOverride);
+    const aoiGeojsons = selectedAois.map((a) => a.geojson);
+    const { url, min, max, dataMin, dataMax } = renderRaster(georaster, aoiGeojsons, palette, invert, domainOverride);
     const bounds: L.LatLngBoundsExpression = [
       [georaster.ymin, georaster.xmin],
       [georaster.ymax, georaster.xmax],
@@ -374,9 +387,10 @@ export function RasterMap({
     onStats({ min, max, dataMin, dataMax });
     // Depend on the override's primitive values, not its object identity --
     // a caller re-creating the object every render (as SpatialView did
-    // before memoizing it) must not re-trigger this effect forever.
+    // before memoizing it) must not re-trigger this effect forever. selectedAois
+    // is safe to depend on directly since the parent memoizes it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [georaster, activeAoi, palette, invert, domainOverride?.min, domainOverride?.max]);
+  }, [georaster, selectedAois, palette, invert, domainOverride?.min, domainOverride?.max]);
 
   return (
     <div className="rastermap">

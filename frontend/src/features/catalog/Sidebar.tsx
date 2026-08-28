@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { ModelSummary } from "../../api/types";
+import { Step } from "../../components/Step";
 import type { VariableKey } from "./catalogIndex";
 import { CATEGORY_ORDER, CATEGORY_LABELS } from "./categories";
 
@@ -270,34 +271,5 @@ export function Sidebar(props: Props) {
         </div>
       </div>
     </nav>
-  );
-}
-
-/** Collapsible numbered step with a header showing a hint (e.g. "2/3"). */
-function Step({
-  n,
-  title,
-  hint,
-  open,
-  onToggle,
-  children,
-}: {
-  n: number;
-  title: string;
-  hint?: string;
-  open: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="step">
-      <button className="step__head step__head--btn" onClick={onToggle}>
-        <span className="step__n">{n}</span>
-        <span className="step__title">{title}</span>
-        {hint && <span className="step__hint muted">{hint}</span>}
-        <span className="catalog__chevron">{open ? "▾" : "▸"}</span>
-      </button>
-      {open && <div className="step__body picker">{children}</div>}
-    </div>
   );
 }

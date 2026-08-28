@@ -106,3 +106,69 @@ export interface RasterEntry {
   fleet_name: string | null;
   year: number;
 }
+
+export interface AnalysisParam {
+  key: string;
+  type: "number" | "bool" | string;
+  default: unknown;
+  label: string | null;
+}
+
+export interface AnalysisSpec {
+  id: string;
+  name: string;
+  description: string | null;
+  requires: {
+    domain?: string;
+    variables?: string[];
+    dims?: string[];
+  };
+  params: AnalysisParam[];
+  entry: string;
+}
+
+export interface AnalysisArtifact {
+  type: "figure" | "table" | "map" | "scalar" | "vega_spec" | string;
+  title: string | null;
+  path?: string;
+  value?: number;
+  unit?: string | null;
+}
+
+export interface AnalysisResult {
+  status: string;
+  title?: string;
+  artifacts: AnalysisArtifact[];
+}
+
+export interface RunAnalysisResponse {
+  job_id: string;
+  result: AnalysisResult;
+}
+
+export type DataSourceKind = "output" | "input";
+
+export interface DataSource {
+  id: string;
+  name: string;
+  path: string;
+  kind: DataSourceKind;
+  added_at: string;
+  last_scanned_at: string | null;
+  status: "unscanned" | "ok" | "error" | string;
+  error: string | null;
+  active: boolean;
+}
+
+export interface BrowseEntry {
+  name: string;
+  path: string;
+  looks_like_source: boolean;
+}
+
+export interface BrowseResult {
+  path: string;
+  parent: string | null;
+  entries: BrowseEntry[];
+  is_drives_list: boolean;
+}

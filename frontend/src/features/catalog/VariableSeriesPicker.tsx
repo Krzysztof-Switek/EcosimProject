@@ -41,9 +41,10 @@ const groupKey = (g: ModelGroup) => g.model ?? "__drivers__";
  * Always-visible picker (docked at the top of the controls column) for the
  * focused variable. Progressive, top-down: only the available models are shown
  * first; a model's scenarios appear when you expand it — so a variable with two
- * models doesn't dump every scenario at once. Nothing is preselected; the user
- * picks the series to plot. Any choice is a per-variable override until
- * "Reset to selected pool" is clicked.
+ * models doesn't dump every scenario at once. Starts with everything from the
+ * steps 1–2 pool checked (`selected` already defaults to the full pool -- see
+ * `effectiveScenarios` in App.tsx) so a freshly-added variable plots immediately;
+ * unchecking anything here creates a per-variable override, undone by "Clear".
  */
 export function VariableSeriesPicker({
   variable,

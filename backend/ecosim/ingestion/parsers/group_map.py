@@ -23,6 +23,27 @@ class Dictionaries:
     groups: pd.DataFrame  # columns: id, name, slug
     fleets: pd.DataFrame  # columns: id, name, slug
 
+    @classmethod
+    def empty(cls) -> "Dictionaries":
+        """No ``Mapa_grupy_fleets.xlsx`` was found nearby -- used instead of
+        refusing to ingest. This dictionary is *this project's* own
+        convention for resolving numeric group/fleet ids to names (EwE
+        itself has no universal numbering convention, so numeric ids alone
+        aren't meaningful across models -- see docs/ewe-data-formats.md
+        §5) -- it was never something EwE packages with its own output, so
+        its absence must not block ingesting output that's otherwise
+        completely real and valid. Every caller of ``group_name``/
+        ``fleet_name``/``*_id_by_name`` already handles "not found" as
+        ``None`` (empty tables just mean everything is "not found"), and
+        Ecospace raster filenames carry their entity name directly (see
+        ``asc_grid.py``) so spatial data stays fully readable regardless."""
+        empty = pd.DataFrame({
+            "id": pd.Series(dtype="int64"),
+            "name": pd.Series(dtype="object"),
+            "slug": pd.Series(dtype="object"),
+        })
+        return cls(groups=empty.copy(), fleets=empty.copy())
+
     def group_name(self, group_id: int) -> str | None:
         row = self.groups.loc[self.groups["id"] == group_id, "name"]
         return None if row.empty else str(row.iloc[0])

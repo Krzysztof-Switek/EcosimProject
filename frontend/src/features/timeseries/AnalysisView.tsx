@@ -4,6 +4,7 @@ import type { VariableKey } from "../catalog/catalogIndex";
 import { MultiSelect, type Option } from "../../components/MultiSelect";
 import { VariableSeriesPicker } from "../catalog/VariableSeriesPicker";
 import { VariableChart } from "./VariableChart";
+import { AnalysisPanel } from "../analyses/AnalysisPanel";
 
 interface Props {
   variables: VariableKey[]; // selected, already in the active freq
@@ -220,6 +221,8 @@ export function AnalysisView({
               );
             })}
           </div>
+
+          <AnalysisPanel manifest={manifest} variableNames={variables.map((v) => v.variable)} />
         </div>
 
         <div className="analysis__grid">

@@ -12,6 +12,16 @@ dispatched on the *data header row* (not the filename, so it is robust):
 Each file is prefixed with a metadata header block delimited by
 ``"<HEADER .../>"`` lines and a ``Data,<Label>`` marker; both are parsed out.
 
+``freq`` ("annual" vs "monthly") is resolved from the data header's own time
+column label (EwE always calls it ``year`` or ``timestep``, confirmed across
+every shape in our real files -- see docs/ewe-data-formats.md), not from the
+filename. All of our current source files happen to also carry a matching
+``_annual``/``_monthly`` filename suffix (the "Results Extractor Plugin"
+convention), so this changes nothing for them -- but it also correctly
+handles a file that doesn't (e.g. EwE's basic auto-save, which per the
+official manual writes "a single output file ... 12 rows of data for each
+year" with no plugin-style filename at all).
+
 The data section is reshaped with vectorised pandas (``melt``/``map``) rather
 than per-row Python loops so monthly files with millions of cells ingest fast.
 """
@@ -92,9 +102,14 @@ def _find_data_section(rows: list[list[str]], start: int) -> tuple[str | None, i
 
 
 def _variable_and_target(path: Path) -> tuple[str, str, str | None]:
-    """Derive (variable_slug, freq, target_group) from the file name."""
+    """Derive (variable_slug, freq, target_group) from the file name.
+
+    ``freq`` here is only a *fallback hint* for the rare case the data header
+    doesn't disambiguate -- see :func:`_resolve_freq`, which is authoritative
+    whenever the header's time column says "year" or "timestep" outright.
+    """
     stem = path.stem
-    freq = "monthly" if stem.endswith("_monthly") else "annual"
+    freq_hint = "monthly" if stem.endswith("_monthly") else "annual"
     for suffix in ("_annual", "_monthly"):
         if stem.endswith(suffix):
             stem = stem[: -len(suffix)]
@@ -104,10 +119,24 @@ def _variable_and_target(path: Path) -> tuple[str, str, str | None]:
     # (partner). predation_<prey> = mortality of prey by each predator;
     # prey_<predator> = diet/consumption of a predator from each prey.
     if stem.startswith("predation_"):
-        return "predation", freq, stem[len("predation_"):].strip()
+        return "predation", freq_hint, stem[len("predation_"):].strip()
     if stem.startswith("prey_"):
-        return "prey", freq, stem[len("prey_"):].strip()
-    return slugify(stem), freq, None
+        return "prey", freq_hint, stem[len("prey_"):].strip()
+    return slugify(stem), freq_hint, None
+
+
+def _resolve_freq(freq_hint: str, time_col_label: str) -> str:
+    """The data header's own time-column name is authoritative when it says
+    "year" or "timestep" outright (EwE uses this consistently regardless of
+    filename, verified across all 4 shapes in our real files); the filename
+    suffix (``freq_hint``) is only a fallback for the rare case it doesn't
+    (e.g. an empty/unrecognised header)."""
+    label = time_col_label.split("\\", 1)[0]  # "timestep\group" -> "timestep"
+    if label == "timestep":
+        return "monthly"
+    if label == "year":
+        return "annual"
+    return freq_hint
 
 
 def _period(freq: str, time_value: pd.Series, start_year: int) -> pd.DataFrame:
@@ -135,21 +164,23 @@ def parse_ecosim_csv(
     rows = _read_rows(path)
     headers, after_header = _parse_header_block(rows)
     data_label, hdr_idx = _find_data_section(rows, after_header)
-    variable, freq, target = _variable_and_target(path)
+    variable, freq_hint, target = _variable_and_target(path)
     start_year = int(headers.get("StartYear", _DEFAULT_START_YEAR))
     # Fall back to the authoritative Ecopath ModelName from the header block.
     if model_name is None:
         model_name = headers.get("ModelName")
     if model is None and model_name:
         model = slugify(model_name)
-    meta = EcosimCsvMeta(
-        variable=variable, freq=freq, start_year=start_year,
-        data_label=data_label, target_group=target, headers=headers,
-    )
 
     header_row = [c.strip() for c in rows[hdr_idx]]
     data_rows = [r for r in rows[hdr_idx + 1:] if any(c.strip() for c in r)]
     first = header_row[0].lower() if header_row else ""
+    freq = _resolve_freq(freq_hint, first)
+
+    meta = EcosimCsvMeta(
+        variable=variable, freq=freq, start_year=start_year,
+        data_label=data_label, target_group=target, headers=headers,
+    )
 
     if not data_rows:
         df = pd.DataFrame(columns=TIMESERIES_COLUMNS)

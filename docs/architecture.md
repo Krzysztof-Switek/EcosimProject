@@ -10,18 +10,33 @@ R na ustandaryzowanym formacie.
 ## Warstwy
 
 ```
-DataEcosim/ (surowe, niezmienne)
+2x źródło danych aktywne (surowe, niezmienne — folder lokalny lub
+podfolder zamontowanego share'a sieciowego), NIEZALEŻNE:
+  📤 output (wymagane) — wyniki Ecosim/Ecospace
+  📥 input  (opcjonalne) — drivery/wymuszenia
    │  INGESTIA (Python): rejestr parserów → tidy
    ▼
-Kanoniczny STORE              KATALOG (DuckDB) — indeks do nawigacji
+Kanoniczny STORE (data/)       KATALOG (DuckDB) — indeks do nawigacji
   • timeseries/ (Parquet)  ◄────────────┘
   • spatial/ (COG + indeks)
   • dictionaries/ (groups, fleets, scenarios)
    │
-   ├─► API (FastAPI): /catalog, /timeseries, /spatial, /analyses, /jobs
-   │      └─► Frontend (React): katalog, wykresy, mapy, runner analiz
+   ├─► API (FastAPI): /catalog, /timeseries, /spatial, /analyses, /jobs, /admin/sources
+   │      └─► Frontend (React): wybór źródeł danych, katalog, wykresy, mapy, runner analiz
    └─► R RUNNER: sandbox plikowy (manifest + data) → Rscript → out/result.json
 ```
+
+**Skąd wziąć dane to nie jest już stała ścieżka wpisana przy starcie procesu** — to
+runtime'owy wybór przez `WorkspaceRegistry` (`core/workspace.py`), osobny dla **output**
+(wymagany — modele/scenariusze/grupy wynikają z niego) i **input** (opcjonalny, tylko
+zmienne typu driver), przełączalny w UI (dwa górne kafelki na ekranie startowym) lub przez
+CLI (`ecosim sources ...`). **Brak jakiegokolwiek domyślnego źródła** — świeża instalacja
+zawsze zaczyna z pustym rejestrem, aplikacja wymusza wskazanie folderu, zanim cokolwiek
+innego zadziała. Kanoniczny magazyn jest jeden, zawsze świeżo przebudowywany przy
+aktywacji którejkolwiek strony (nie ma per-źródłowego cache'a do sprzątania). Wymagany
+układ katalogów źródłowych: [`data-contract.md`](data-contract.md#oczekiwany-układ-katalogów-źródłowych)
+(walidowany przy rejestracji, nie tylko przy ingestii). Pełny opis procesu projektowego:
+[`Plans and TO_DO lists/27.08_data_upload_PLAN.md`](Plans%20and%20TO_DO%20lists/27.08_data_upload_PLAN.md).
 
 ## Kanoniczny model
 
@@ -43,7 +58,10 @@ Kanoniczny STORE              KATALOG (DuckDB) — indeks do nawigacji
 
 | Warstwa | Lokalizacja |
 |---|---|
-| Konfiguracja ścieżek | `backend/ecosim/core/config.py` |
+| Konfiguracja ścieżek (per aktywne źródło) | `backend/ecosim/core/config.py` |
+| Rejestr źródeł danych | `backend/ecosim/core/workspace.py` |
+| Aktywacja źródła (ingestia + rebuild katalogu) | `backend/ecosim/ingestion/activation.py` |
+| API zarządzania źródłami | `backend/ecosim/api/routers/sources.py` |
 | Kanoniczny schemat | `backend/ecosim/core/schema.py` |
 | Parsery | `backend/ecosim/ingestion/parsers/` |
 | Zapis Parquet | `backend/ecosim/ingestion/store.py` |
