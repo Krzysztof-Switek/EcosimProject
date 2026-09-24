@@ -16,33 +16,17 @@ frontend/.vite/
 .idea/
 .vscode/
 
-# --- Canonical store (regenerable from DataEcosim/) ---
-/data/timeseries/
-/data/spatial/
-/data/catalog/
-/data/dictionaries/
-/data/jobs/
-
-# --- Raw source data (large; keep out of git) ---
+# --- User data & canonical store now live under ~/.ecosim/, not here ---
+# (see backend/ecosim/core/workspace.py profile_dir()) -- nothing should
+# ever be written to /data/ or /DataEcosim/ in the project root again, but
+# these stay as a safety net against an old habit or a stray script.
+/data/
 /DataEcosim/
 
 # --- R ---
 .Rhistory
 .RData
 rkit/**/*.Rproj.user
-/DataEcosim/
-
-/DataEcosim/
-
-/DataEcosim/
-
-/DataEcosim/
-/DataEcopath/
-
-/.idea/
-
-/DataEcosim/
-/DataEcopath/
 
 /zrzuty_ekranu/
 

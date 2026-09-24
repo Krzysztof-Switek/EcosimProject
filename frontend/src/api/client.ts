@@ -3,7 +3,6 @@ import type {
   BrowseResult,
   DataSource,
   DataSourceKind,
-  DimItem,
   ModelSummary,
   RasterEntry,
   RasterLayer,
@@ -23,6 +22,19 @@ async function getJson<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** An error response whose `detail` is structured data (an object with at
+ * least `message`), not just a string -- so a caller can react to *which*
+ * situation it is (e.g. `code: "not_local"`), not only show text. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly detail: Record<string, unknown>,
+  ) {
+    super(message);
+  }
+}
+
 async function postJson<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
@@ -32,6 +44,18 @@ async function postJson<T>(path: string, body?: unknown): Promise<T> {
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => null);
+    if (detail?.detail && typeof detail.detail === "object") {
+      throw new ApiError(String(detail.detail.message ?? res.statusText), res.status, detail.detail);
+    }
+    throw new Error(detail?.detail ?? `${res.status} ${res.statusText} — ${path}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+async function deleteJson<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { method: "DELETE" });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
     throw new Error(detail?.detail ?? `${res.status} ${res.statusText} — ${path}`);
   }
   return res.json() as Promise<T>;
@@ -39,9 +63,6 @@ async function postJson<T>(path: string, body?: unknown): Promise<T> {
 
 export interface ReloadResult {
   status: string;
-  // Only present on POST /admin/sources/{id}/activate, not on the generic
-  // /admin/reload (which just re-scans whatever is already active).
-  source_id?: string;
   models: string[];
   scenarios: string[];
   datasets: number;
@@ -50,22 +71,72 @@ export interface ReloadResult {
   errors: number;
   rasters_indexed: number;
   spatial_errors: number;
-  group_dictionary_found: boolean;
+  data_kind: "spatial" | "timeseries" | "mixed" | "montecarlo" | null;
+  run_count: number;
+  // Files recognised as a known-but-unsupported CSV shape (Ecospace's own
+  // "export map as CSV", already fully covered by the .asc raster index;
+  // region/age-structure breakdowns, not yet representable in this
+  // project's schema) -- skipped cleanly, not counted in `errors`.
+  skipped_unsupported: number;
+  // One sentence per kind of thing the scan found but did not load.
+  warnings: string[];
+}
+
+// POST .../activate now only confirms the attempt was accepted -- ingestion
+// runs in the background (see backend/ecosim/ingestion/activation.py) so a
+// very large dataset (verified: ~400GB/800k+ files) doesn't leave the
+// request looking hung. Poll activationStatus() for live progress.
+export interface ActivationStartResult {
+  status: "started";
+  source_id: string;
+}
+
+export interface ActivationStatus {
+  status: "unknown" | "running" | "ok" | "error" | "cancelled";
+  phase: string | null;
+  files_done: number;
+  files_total: number | null;
+  result?: ReloadResult & { source_id: string };
+  error?: string;
+}
+
+// Detail of the 409 POST /admin/sources returns for a folder whose files
+// are cloud-only placeholders (backend api/routers/sources.py::add_source).
+export interface NotLocalInfo {
+  code: "not_local";
+  message: string;
+  cloud_only_files: number;
+  cloud_only_bytes: number;
+  files_checked: number;
+  // False on a server: nothing there can ask a sync app to download.
+  can_download: boolean;
+}
+
+export function asNotLocal(e: unknown): NotLocalInfo | null {
+  return e instanceof ApiError && e.detail.code === "not_local" ? (e.detail as unknown as NotLocalInfo) : null;
 }
 
 export const api = {
   models: () => getJson<ModelSummary[]>("/catalog/models"),
   scenarios: () => getJson<ScenarioSummary[]>("/catalog/scenarios"),
   tree: () => getJson<ScenarioTreeNode[]>("/catalog/tree"),
-  groups: () => getJson<DimItem[]>("/dictionaries/groups"),
-  fleets: () => getJson<DimItem[]>("/dictionaries/fleets"),
 
   reload: () => postJson<ReloadResult>("/admin/reload"),
 
   sources: (kind?: DataSourceKind) => getJson<DataSource[]>(`/admin/sources${kind ? `?kind=${kind}` : ""}`),
-  addSource: (name: string, path: string, kind: DataSourceKind) =>
-    postJson<DataSource>("/admin/sources", { name, path, kind }),
-  activateSource: (id: string) => postJson<ReloadResult>(`/admin/sources/${encodeURIComponent(id)}/activate`),
+  // Throws ApiError with detail.code === "not_local" (see NotLocalInfo) when
+  // the folder's files aren't on this computer yet and keepLocal is false.
+  addSource: (name: string, path: string, kind: DataSourceKind, keepLocal = false) =>
+    postJson<DataSource>("/admin/sources", { name, path, kind, keep_local: keepLocal }),
+  activateSource: (id: string) =>
+    postJson<ActivationStartResult>(`/admin/sources/${encodeURIComponent(id)}/activate`),
+  rescanSource: (id: string) =>
+    postJson<ActivationStartResult>(`/admin/sources/${encodeURIComponent(id)}/rescan`),
+  activationStatus: (id: string) =>
+    getJson<ActivationStatus>(`/admin/sources/${encodeURIComponent(id)}/activation-status`),
+  cancelActivation: (id: string) =>
+    postJson<{ status: string; source_id: string }>(`/admin/sources/${encodeURIComponent(id)}/activation-cancel`),
+  removeSource: (id: string) => deleteJson<{ status: string }>(`/admin/sources/${encodeURIComponent(id)}`),
   browse: (path?: string) => {
     const q = path ? `?path=${encodeURIComponent(path)}` : "";
     return getJson<BrowseResult>(`/admin/browse${q}`);

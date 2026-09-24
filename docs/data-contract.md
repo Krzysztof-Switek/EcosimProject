@@ -40,19 +40,27 @@ under this folder...") zanim cokolwiek się zaindeksuje. Wskazanie katalogu o je
 za wysoko lub za nisko (np. wprost na sam folder z `.asc`, zamiast jego rodzica) **nie jest
 już błędem** — rekurencja i tak to znajdzie.
 
-**Słownik grup/flot (`Mapa_grupy_fleets.xlsx`) jest opcjonalny, nie wymagany.** To **własna
-konwencja tego projektu** do rozwiązywania numerycznych id grup/flot EwE na czytelne nazwy —
-**nie** artefakt czy wymóg samego EwE; żaden fragment oficjalnej dokumentacji go nie zna ani
-nie wymaga. Jeśli plik zostanie znaleziony gdziekolwiek pod wskazanym katalogiem, jest
-używany do rozwiązania nazw. Jeśli go nie ma:
-- Rastry (`.asc`) i tak mają nazwę encji wprost w nazwie pliku (natywna, opisowa konwencja
-  EwE) — nic się nie gubi.
-- Wiersze CSV zachowują swoje `group_id`/`fleet_id`, ale `name` wychodzi jako `null`
-  (`Dictionaries.empty()`, patrz `parsers/group_map.py`).
+**Nie ma żadnego zewnętrznego słownika grup/flot w rdzeniu aplikacji (usunięte 2026-08-28).**
+Dawniej istniał opcjonalny `Mapa_grupy_fleets.xlsx` (własna konwencja tego projektu do
+rozwiązywania numerycznych id grup/flot EwE na czytelne nazwy) — usunięty całkowicie, wraz
+ze wszystkimi odniesieniami w kodzie, bo mylił użytkowników co do tego, co jest strukturą
+EwE a co dodatkiem tego projektu, i bo taki słownik z definicji jest specyficzny dla
+konkretnego użytkownika/instalacji, nie dla całej aplikacji. Dziś:
+- Rastry (`.asc`) mają nazwę encji wprost w nazwie pliku (natywna, opisowa konwencja EwE) —
+  zawsze się rozwiązują.
+- CSV w kształcie wide-by-name/predation (`predation_*`, `prey_*`) też mają realne nazwy
+  wprost w pliku (nazwa w nazwie pliku, partnerzy w nagłówkach kolumn) — rozwiązują się bez
+  żadnego słownika.
+- CSV w kształcie wide-by-id i long (bare numeryczne id grup/flot, np. biomasa, catch)
+  zachowują `group_id`/`fleet_id`, ale `name` zawsze wychodzi jako `null` — EwE nie
+  eksportuje nazwy dla tych kształtów w żaden sposób, więc nie ma z czego jej odtworzyć bez
+  zewnętrznego źródła.
 
-Wcześniej brak tego pliku twardo blokował całe ładowanie danych z mylącym błędem
-wskazującym na plik xlsx jako "brakujący output modelu" — naprawione 27.08, pokryte
-`backend/tests/test_optional_dictionary.py`.
+Jeśli w przyszłości pojawi się realna potrzeba nazw dla tych kształtów, taki słownik
+powinien żyć w katalogu profilu użytkownika (`~/.ecosim/profiles/<id>/`, patrz
+`core/workspace.py::profile_dir()`) i być dostępny wyłącznie dla tego profilu — nie
+skanowany z surowego folderu danych ani współdzielony między użytkownikami/instalacjami,
+jak było wcześniej.
 
 **Model input data** (opcjonalne) — również dowolny katalog, przeszukiwany rekurencyjnie
 (`_discover_input`) w poszukiwaniu `trend_*.csv` i pasujących `.asc`. W odróżnieniu od
@@ -85,8 +93,17 @@ flota-grupa, jednoseryjny) jest sprowadzany do jednej tabeli o kolumnach:
 | `value` | float | wartość |
 | `unit` | str? | etykieta/jednostka z metadanych EwE |
 
-Słowniki (`groups`, `fleets`, `scenarios`) są jedynym źródłem prawdy dla mapowania
-ID ↔ nazwa i są eksportowane do `data/dictionaries/`.
+`group_name`/`fleet_name`/`partner_name` pochodzą wyłącznie z treści, którą EwE samo
+zapisuje w pliku (nazwy kolumn w kształcie wide-by-name/predation, nazwa encji w nazwie
+pliku `.asc`) — nigdy z zewnętrznego słownika. Dla kształtów, gdzie EwE eksportuje tylko
+gołe numeryczne id (wide-by-id, long fleet-group), nazwa zostaje `null`; `*_id` jest zawsze
+zachowane niezależnie od tego. Zewnętrzny słownik ID↔nazwa (dawniej `Mapa_grupy_fleets.xlsx`)
+został usunięty z rdzenia aplikacji 2026-08-28 — patrz
+[`28.08_session_summary.md`](Plans%20and%20TO_DO%20lists/28.08_session_summary.md). Jeśli
+taki mechanizm powróci, będzie to słownik **per użytkownik**, żyjący w katalogu profilu
+(`~/.ecosim/profiles/<id>/`), nie coś skanowane z surowego folderu danych ani współdzielone
+między użytkownikami. `scenarios`/`models` (prawdziwa struktura Ecosim/Ecopath, nie
+zewnętrzny słownik) nadal są eksportowane do `data/dictionaries/`.
 
 ## Sandbox uruchomienia analizy
 
@@ -94,27 +111,32 @@ Dla każdego uruchomienia framework przygotowuje katalog roboczy:
 
 ```
 job_<id>/
-  manifest.json        # selekcja z UI: scenariusze, zmienne, grupy, zakres lat, freq
+  manifest.json        # selekcja z UI (scenariusze, zmienne, grupy, zakres lat, freq)
+                        # + analysis_id/created_at dopisane przez prepare_job() -- trwały
+                        # ślad "kto/co/kiedy" do przyszłych zestawień użycia per profil
   params.json          # parametry formularza danej analizy
   data/
     timeseries.parquet # JUŻ przefiltrowane wg selekcji (schemat powyżej)
     spatial/           # (analizy przestrzenne) COG-i + raster_index.csv
-    dictionaries/      # groups.csv, fleets.csv, scenarios.csv
+    dictionaries/      # scenarios.csv
   out/                 # <-- skrypt zapisuje tu wyniki
 ```
 
-### `manifest.json` (przykład)
+### `manifest.json` (przykład — kształt faktycznie zapisywany przez `prepare_job()`)
 ```json
 {
-  "analysis_id": "biomass_trend_compare",
   "scenarios": ["baseline_cumulative", "has_cumulative"],
   "variables": ["biomass"],
   "freq": "annual",
   "groups": ["Cod adult", "Herring adult"],
   "year_from": 1998,
-  "year_to": 2050
+  "year_to": 2050,
+  "analysis_id": "biomass_trend_compare",
+  "created_at": "2026-08-28T09:15:00.123456+00:00"
 }
 ```
+`analysis_id`/`created_at` są dopisywane automatycznie przez `prepare_job()` (nie są częścią
+selekcji z UI) — nigdy nie trzeba ich podawać przy tworzeniu manifestu.
 
 ## Wyniki: katalog `out/` + `result.json`
 

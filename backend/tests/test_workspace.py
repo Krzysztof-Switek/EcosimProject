@@ -75,13 +75,15 @@ def test_add_activate_remove_cycle(tmp_path):
 
 
 def test_add_source_does_not_replace_by_itself(tmp_path):
-    # add_source() alone must NOT prune the previous same-kind source --
-    # only keep_only() does that, and only ingestion.activation calls it,
-    # only after the new source has actually proven itself. If add_source()
-    # pruned eagerly, a failed activation of the new source would have
-    # already destroyed the still-working previous one's registration
-    # before we even knew activation would fail -- see
+    # add_source() must NOT prune the previous same-kind source. Originally
+    # this mattered because a failed activation of the new source could
+    # otherwise destroy the still-working previous one's registration before
+    # activation even finished -- see
     # test_activation.py::test_failed_activation_does_not_replace_the_active_source.
+    # As of 2026-08-28 it matters for a second reason too: the registry now
+    # keeps every source ever added (see test_activate_source_does_not_prune_other_sources
+    # in test_activation.py), each independently cached, not just the most
+    # recently activated one per kind.
     registry = _registry(tmp_path)
     first_dir = tmp_path / "first"
     second_dir = tmp_path / "second"
@@ -94,10 +96,14 @@ def test_add_source_does_not_replace_by_itself(tmp_path):
 
 
 def test_keep_only_replaces_existing_source_of_the_same_kind(tmp_path):
-    # No remembered history/list in the UI any more (removed 27.08 -- "keep
-    # it simple" until there's per-user accounts) -- once a new source has
-    # activated successfully, ingestion.activation calls keep_only() so the
-    # old one doesn't silently accumulate alongside it.
+    # keep_only() itself still works exactly as before -- this tests the
+    # primitive in isolation. As of 2026-08-28, ingestion.activation no
+    # longer calls it after a successful activation (see
+    # test_activation.py::test_activate_source_does_not_prune_other_sources):
+    # each source now gets its own independently-cached ingest output, so
+    # the registry keeps a genuine history of everything ever added instead
+    # of pruning to one-per-kind. Left in place as a reasonable primitive
+    # for a future explicit "forget everything except this" bulk action.
     registry = _registry(tmp_path)
     first_dir = tmp_path / "first"
     second_dir = tmp_path / "second"

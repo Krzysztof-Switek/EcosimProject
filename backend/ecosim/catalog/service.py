@@ -134,18 +134,6 @@ def get_scenario_tree(settings: Settings | None = None) -> list[dict]:
     ]
 
 
-def list_groups(settings: Settings | None = None) -> list[dict]:
-    settings = settings or get_settings()
-    with _ro(settings) as con:
-        return _rows(con, "SELECT * FROM dim_groups ORDER BY id")
-
-
-def list_fleets(settings: Settings | None = None) -> list[dict]:
-    settings = settings or get_settings()
-    with _ro(settings) as con:
-        return _rows(con, "SELECT * FROM dim_fleets ORDER BY id")
-
-
 def query_timeseries(
     settings: Settings | None = None,
     *,

@@ -14,6 +14,22 @@ from ecosim.core.workspace import NoActiveDataSourceError
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def _isolated_ecosim_home():
+    """Overrides conftest.py's per-test ECOSIM_CONFIG_DIR isolation for this
+    file specifically (a same-named fixture in a test module takes
+    precedence over conftest.py's): these tests are intentionally gated on
+    -- and query -- whatever REAL data source is currently active in this
+    machine's actual ~/.ecosim profile (see pytestmark_catalog below, which
+    checks that at module-import time). They only ever READ from the
+    catalog (prepare_job/run_analysis's query_timeseries calls), never write
+    to the shared store, so there's no corruption risk in leaving them
+    pointed at the real environment -- unlike ingestion.activation-calling
+    tests elsewhere in this suite, which is exactly what conftest.py's
+    fixture exists to protect (see its docstring for the real incident)."""
+    yield
+
+
 def test_list_analyses_finds_biomass_trend_compare():
     specs = registry.list_analyses()
     ids = [s.id for s in specs]
@@ -65,12 +81,22 @@ def test_prepare_job_writes_sandbox_contract():
         assert (job_dir / "manifest.json").exists()
         assert (job_dir / "params.json").exists()
         assert (job_dir / "data" / "timeseries.parquet").exists()
-        assert (job_dir / "data" / "dictionaries" / "groups.csv").exists()
-        assert (job_dir / "data" / "dictionaries" / "fleets.csv").exists()
+        # No groups.csv/fleets.csv any more -- that external dictionary was
+        # removed entirely 2026-08-28 (see
+        # docs/Plans and TO_DO lists/28.08_session_summary.md); only real
+        # Ecosim structure (scenarios) is exported into the sandbox.
+        assert not (job_dir / "data" / "dictionaries" / "groups.csv").exists()
+        assert not (job_dir / "data" / "dictionaries" / "fleets.csv").exists()
         assert (job_dir / "data" / "dictionaries" / "scenarios.csv").exists()
         assert (job_dir / "out").is_dir()
 
+        import json
+
         import pandas as pd
+
+        written_manifest = json.loads((job_dir / "manifest.json").read_text(encoding="utf-8"))
+        assert written_manifest["analysis_id"] == "biomass_trend_compare"
+        assert written_manifest["created_at"]  # non-empty ISO timestamp, added by prepare_job()
 
         df = pd.read_parquet(job_dir / "data" / "timeseries.parquet")
         assert (df["variable"] == "biomass").all()

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api/client";
 import { useAsync } from "./api/useAsync";
+import type { DimItem } from "./api/types";
 import { buildVariableIndex, type VariableKey } from "./features/catalog/catalogIndex";
 import { Sidebar } from "./features/catalog/Sidebar";
 import { AnalysisView } from "./features/timeseries/AnalysisView";
@@ -8,6 +9,7 @@ import { Landing } from "./features/home/Landing";
 import { SpatialView } from "./features/spatial/SpatialView";
 import { MonteCarloView } from "./features/montecarlo/MonteCarloView";
 import { DataSourcePanel } from "./features/datasource/DataSourcePanel";
+import { useActivationTracker, activationLabel } from "./features/datasource/useActivationTracker";
 
 const varId = (v: { domain: string; variable: string }) => `${v.domain}|${v.variable}`;
 
@@ -53,11 +55,15 @@ export default function App() {
   const [reloading, setReloading] = useState(false);
   const [reloadMsg, setReloadMsg] = useState<string | null>(null);
 
-  const onSourceActivated = () => {
-    setSourcePanelKind(null);
+  // Ingestion for a large dataset can take a long time -- this tracks it
+  // independently of which screen is open (survives navigating away, even a
+  // page reload) instead of dying with whichever component started it. See
+  // useActivationTracker's own docstring for why this moved up from
+  // DataSourcePanel.
+  const activation = useActivationTracker(() => {
     setSourceToken((t) => t + 1);
     setReloadToken((t) => t + 1);
-  };
+  });
 
   const dataSourceReadout = (
     <span className="muted app__sourcereadout">
@@ -66,11 +72,25 @@ export default function App() {
     </span>
   );
 
+  // Visible from every screen, not just Landing, so a large dataset loading
+  // in the background never requires sitting on one specific page to see
+  // whether it's still working.
+  const activationPill = activation.activating && (
+    <span className="badge badge--muted app__activation-pill" title={activation.activating.name}>
+      ⏳ {activationLabel(activation.status)}
+    </span>
+  );
+
   const models = useAsync(() => api.models(), [reloadToken]);
   const tree = useAsync(() => api.tree(), [reloadToken]);
-  const groups = useAsync(() => api.groups(), [reloadToken]);
-  const fleets = useAsync(() => api.fleets(), [reloadToken]);
   const scenarios = useAsync(() => api.scenarios(), [reloadToken]);
+  // No group/fleet name dictionary exists any more (removed 2026-08-28, see
+  // docs/Plans and TO_DO lists/28.08_session_summary.md) -- these stay as
+  // empty arrays so SpatialView/AnalysisView's existing "no dictionary"
+  // fallback (alphabetical sort, no name-filter options) is simply the only
+  // state now, not a conditional one.
+  const groups: DimItem[] = [];
+  const fleets: DimItem[] = [];
 
   const reloadData = async () => {
     setReloading(true);
@@ -235,8 +255,8 @@ export default function App() {
     return selectedVariables.find((v) => varId(v) === focusedVarId) ?? selectedVariables[0];
   }, [selectedVariables, focusedVarId]);
 
-  const loading = tree.loading || models.loading || groups.loading || fleets.loading;
-  const error = tree.error || models.error || groups.error || fleets.error;
+  const loading = tree.loading || models.loading;
+  const error = tree.error || models.error;
 
   const homeBtn = (
     <button className="btn btn--ghost" onClick={() => setModule(null)} title="Back to start">
@@ -280,7 +300,26 @@ export default function App() {
           </div>
           <div className="app__bar-right">{themeToggle}</div>
         </header>
-        <DataSourcePanel kind={sourcePanelKind} onActivated={onSourceActivated} />
+        <DataSourcePanel
+          kind={sourcePanelKind}
+          sources={(sources.data ?? []).filter((s) => s.kind === sourcePanelKind)}
+          onActivationStarted={(source) => {
+            // Registration succeeded and ingestion has been kicked off in
+            // the background -- leave immediately rather than making the
+            // user sit on this screen watching it finish. Progress keeps
+            // showing on the Landing tile / app bar from here.
+            activation.start(source);
+            setSourcePanelKind(null);
+          }}
+          onSourceRemoved={() => {
+            // Same refresh as a finished activation (see useActivationTracker
+            // above) -- unloading a source changes what the catalog/tiles
+            // should show just as much as loading one does.
+            setSourceToken((t) => t + 1);
+            setReloadToken((t) => t + 1);
+          }}
+          activation={activation}
+        />
       </div>
     );
   }
@@ -295,11 +334,20 @@ export default function App() {
           <span className="app__brand">Ecosim · Results Explorer</span>
           <div className="app__bar-right">{themeToggle}</div>
         </header>
+        {activation.error && (
+          <div className="error pad app__activation-error">
+            {activation.error}
+            <button className="btn btn--ghost" onClick={activation.dismissError}>✕</button>
+          </div>
+        )}
         <Landing
           onSelect={setModule}
           onOpenSource={setSourcePanelKind}
           activeOutput={activeOutput}
-          activeInput={activeInput}
+          outputCount={(sources.data ?? []).filter((s) => s.kind === "output").length}
+          inputCount={(sources.data ?? []).filter((s) => s.kind === "input").length}
+          activating={activation.activating}
+          activatingStatus={activation.status}
         />
       </div>
     );
@@ -314,13 +362,14 @@ export default function App() {
             <span className="app__brand">Spatial data</span>
           </div>
           <div className="app__bar-right">
+            {activationPill}
             {dataSourceReadout}
             {themeToggle}
           </div>
         </header>
         <div className="app__body">
           <main className="app__main">
-            <SpatialView groups={groups.data ?? []} fleets={fleets.data ?? []} />
+            <SpatialView groups={groups} fleets={fleets} />
           </main>
         </div>
       </div>
@@ -336,13 +385,14 @@ export default function App() {
             <span className="app__brand">Monte Carlo</span>
           </div>
           <div className="app__bar-right">
+            {activationPill}
             {dataSourceReadout}
             {themeToggle}
           </div>
         </header>
         <div className="app__body">
           <main className="app__main">
-            <MonteCarloView />
+            <MonteCarloView activeOutput={activeOutput} />
           </main>
         </div>
       </div>
@@ -361,6 +411,7 @@ export default function App() {
           <span className="muted">
             {models.data?.length ?? 0} models · {variables.length} variables
           </span>
+          {activationPill}
           {dataSourceReadout}
           {themeToggle}
           <button className="btn" onClick={reloadData} disabled={reloading}>
@@ -399,8 +450,8 @@ export default function App() {
                 scenarioLabel={scenarioLabel}
                 scenariosForVar={effectiveScenarios}
                 availableScenarios={availableScenarios}
-                groups={groups.data ?? []}
-                fleets={fleets.data ?? []}
+                groups={groups}
+                fleets={fleets}
                 onRemove={removeVar}
                 onClear={clearVars}
                 focusedVariable={focusedVariable}

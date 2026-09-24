@@ -3,6 +3,19 @@
 Every raw CSV shape (wide-by-id, wide-by-name, long fleet-group, single series)
 is normalised into rows with these columns. ``group_*``, ``fleet_*`` and
 ``partner_*`` are nullable and only populated for the dimensions a variable has.
+
+``run_id`` (added 2026-08-28): null for ordinary single-run output (the
+overwhelming common case -- e.g. today's real DataEcosim-shaped data), and
+only populated when multiple runs of the *same* (model, scenario) are
+actually discovered under one activated source -- Monte Carlo/Ecosampler
+output being the real, verified case (UG p.49-66's ``Sample_N`` convention;
+confirmed against a real ~58-sample dataset 2026-08-28, see
+docs/Plans and TO_DO lists/28.08_session_summary.md). Before this, two
+files sharing (model, scenario, variable, freq) but living in different
+directories were either silently concatenated into one indistinguishable
+scenario (CSV) or rejected as a duplicate id (rasters) -- both wrong. See
+``ingestion.pipeline._discover_output``/``ingestion.spatial_pipeline.
+_discover_output_rasters`` for how this is populated.
 """
 
 from __future__ import annotations
@@ -30,6 +43,7 @@ TIMESERIES_COLUMNS: list[str] = [
     "partner_name",   # nullable str
     "value",          # float
     "unit",           # nullable str
+    "run_id",         # nullable str -- see module docstring
 ]
 
 # Arrow schema used when writing Parquet so column types stay stable even when
@@ -53,6 +67,7 @@ TIMESERIES_ARROW_SCHEMA = pa.schema(
         ("partner_name", pa.string()),
         ("value", pa.float64()),
         ("unit", pa.string()),
+        ("run_id", pa.string()),
     ]
 )
 
@@ -67,7 +82,7 @@ TIMESERIES_ARROW_SCHEMA = pa.schema(
 # than duplicated here. ``group_*``/``fleet_*`` are the same entity dimension
 # as the tidy schema (mutually exclusive here: a raster has at most one).
 RASTER_INDEX_COLUMNS: list[str] = [
-    "id",             # stable slug: scenario|domain|variable|entity_slug|year
+    "id",             # stable slug: scenario|domain|variable|entity_slug|year(|run_id)
     "model",          # Ecopath model id; null for input drivers
     "model_name",
     "scenario",       # canonical scenario id, matches the timeseries store
@@ -78,6 +93,9 @@ RASTER_INDEX_COLUMNS: list[str] = [
     "fleet_id",
     "fleet_name",
     "year",
+    "run_id",         # nullable str -- see TIMESERIES_COLUMNS' docstring note above;
+                       # appended to `id` only when non-null, so single-run data's ids are
+                       # byte-for-byte unchanged from before this column existed
     "path",           # target COG path, relative to the spatial store root (data/spatial/)
     "source_path",    # absolute raw .asc path -- needed to materialize on demand
     "source_crs_wkt",  # CoordinateSystemWKT from this scenario's Ecospace RunInfo.txt, if any --

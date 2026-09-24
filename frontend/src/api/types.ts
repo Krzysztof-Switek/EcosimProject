@@ -148,6 +148,11 @@ export interface RunAnalysisResponse {
 
 export type DataSourceKind = "output" | "input";
 
+// What the most recent successful scan actually found -- drives which
+// Explore tiles (Spatial/Time series/Monte Carlo) are unlocked on the
+// Landing page. null until scanned, or when nothing was ingestible.
+export type DataKind = "spatial" | "timeseries" | "mixed" | "montecarlo" | null;
+
 export interface DataSource {
   id: string;
   name: string;
@@ -158,6 +163,20 @@ export interface DataSource {
   status: "unscanned" | "ok" | "error" | string;
   error: string | null;
   active: boolean;
+  data_kind: DataKind;
+  run_count: number;
+  // Wall-clock seconds the most recent successful (re)scan took -- null
+  // until scanned, or for a source migrated from the pre-per-source-cache
+  // layout whose original scan duration was never recorded. Shown next to
+  // the Rescan button as a rough time estimate.
+  scan_duration_seconds: number | null;
+  // Total size on disk of this source's own cache slot -- NOT the shared
+  // live store (catalog.duckdb, materialized COGs), which isn't
+  // attributable to one specific source. 0 for a never-scanned source.
+  cache_size_bytes: number;
+  // What the last successful scan found but did NOT load (unrecognised map
+  // files, unsupported CSV shapes, unreadable files) -- one sentence each.
+  scan_warnings: string[];
 }
 
 export interface BrowseEntry {

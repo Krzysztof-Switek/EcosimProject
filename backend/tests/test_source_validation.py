@@ -51,15 +51,13 @@ def test_validate_input_root_also_accepts_pointing_directly_at_input_subfolder()
     assert validate_input_root(RAW / "input") == []
 
 
-def test_validate_output_root_accepts_real_data_with_no_dictionary(tmp_path):
+def test_validate_output_root_accepts_real_data_in_an_arbitrary_folder_shape(tmp_path):
     # Regression test for the real bug (2026-08-27) that started this: a user
-    # pointed this tile at genuine Monte Carlo output that just happened to
-    # keep its Mapa_grupy_fleets.xlsx dictionary elsewhere, and got rejected
-    # with an error citing a file EwE itself has never heard of. The
-    # dictionary is our own convention for resolving numeric ids to names,
-    # not proof a folder is valid EwE output -- see Dictionaries.empty() and
-    # this function's docstring. Real, discoverable scenario data must be
-    # accepted regardless of whether the dictionary is anywhere nearby, and
+    # pointed this tile at genuine Monte Carlo output organised differently
+    # than our one example dataset, and got rejected with an error citing a
+    # file (Mapa_grupy_fleets.xlsx) EwE itself has never heard of and that
+    # this project no longer has any code path to even look for (removed
+    # 2026-08-28). Real, discoverable scenario data must be accepted
     # regardless of what folder it's organised under (no "output/" folder
     # here either -- straight in the root).
     ecosim_dir = tmp_path / "some_arbitrary_folder_name" / "nested_again"

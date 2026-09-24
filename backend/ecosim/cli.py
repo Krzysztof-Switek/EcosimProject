@@ -23,64 +23,74 @@ def _get_settings_or_exit():
         raise typer.Exit(1) from exc
 
 
+def _active_sources_or_exit():
+    from ecosim.core.workspace import get_workspace_registry
+
+    registry = get_workspace_registry()
+    output = registry.active("output")
+    if output is None:
+        typer.echo("Error: No active model output data source. Run `ecosim sources activate <id>` first.")
+        raise typer.Exit(1)
+    input_source = registry.active("input")
+    return registry, output, input_source
+
+
 @app.command()
 def ingest() -> None:
-    """Parse the active data source(s) into the canonical Parquet store and rebuild the catalog."""
-    from ecosim.ingestion.pipeline import run_ingest
+    """Force-rescan the active data source(s) into their own cache slots and
+    rebuild the combined catalog -- same as ``ecosim sources activate``'s
+    Rescan, looped over whichever of output/input are currently active (see
+    ``ingestion.activation.rescan_source``)."""
+    from ecosim.ingestion.activation import rescan_source
 
-    settings = _get_settings_or_exit()
-    typer.echo(f"Output source : {settings.output_raw_dir}")
-    typer.echo(f"Input source  : {settings.input_raw_dir or '(none)'}")
-    typer.echo(f"Store         : {settings.store_dir}")
-    report = run_ingest(settings)
-    typer.echo(
-        f"Done. scenarios={len(report.scenarios)} "
-        f"files_read={report.files_read} datasets={report.datasets_written} "
-        f"rows={report.rows_written}"
-    )
-    for scn in report.scenarios:
-        typer.echo(f"  - {scn['id']} ({scn['domain']})")
-    if report.errors:
-        typer.echo(f"\n{len(report.errors)} file(s) skipped:")
-        for err in report.errors[:20]:
-            typer.echo(f"  ! {err}")
+    registry, output, input_source = _active_sources_or_exit()
+    typer.echo(f"Output source : {output.path}")
+    typer.echo(f"Input source  : {input_source.path if input_source else '(none)'}")
+    for source in [output] + ([input_source] if input_source else []):
+        report = rescan_source(registry, source)
+        typer.echo(
+            f"[{source.kind}] {source.name}: scenarios={len(report.scenarios)} "
+            f"files_read={report.files_read} datasets={report.datasets} rows={report.rows}"
+        )
+        if report.errors:
+            typer.echo(f"  {report.errors} file(s) skipped with errors.")
+        if report.skipped_unsupported:
+            typer.echo(
+                f"  {report.skipped_unsupported} file(s) recognised as a known-but-"
+                "unsupported shape (Ecospace map-as-CSV / region-age-structure), "
+                "skipped -- not errors."
+            )
 
 
 @app.command()
 def ingest_spatial() -> None:
-    """Index the active source(s)' .asc maps (fast) and rebuild the catalog.
-
-    Only discovers rasters and records where their raw source lives -- it
-    does not convert anything, so it runs in well under a minute even for
-    ~13k files. Individual rasters are converted to COGs lazily, on first
-    request, via GET /spatial/raster/{id}. Safe to re-run after new raw
-    scenarios arrive.
+    """Force-rescan the active source(s)' .asc maps (fast) and rebuild the
+    catalog -- see ``ingest``'s docstring; this is the same rescan, just
+    described in spatial-only terms for anyone reaching for the old command
+    name. Individual rasters are still converted to COGs lazily, on first
+    request, via GET /spatial/raster/{id}.
     """
-    from ecosim.ingestion.spatial_pipeline import build_raster_index
+    from ecosim.ingestion.activation import rescan_source
 
-    settings = _get_settings_or_exit()
-    typer.echo(f"Output source : {settings.output_raw_dir}")
-    typer.echo(f"Input source  : {settings.input_raw_dir or '(none)'}")
-    typer.echo(f"Spatial store : {settings.spatial_dir}")
-    report = build_raster_index(settings)
-    typer.echo(f"Done. files_seen={report.files_seen} indexed={report.rasters_indexed}")
-    if report.errors:
-        typer.echo(f"\n{len(report.errors)} file(s) skipped with errors:")
-        for err in report.errors[:20]:
-            typer.echo(f"  ! {err}")
-
-    from ecosim.catalog.build import build_catalog
-
-    build_catalog(settings)
+    registry, output, input_source = _active_sources_or_exit()
+    typer.echo(f"Output source : {output.path}")
+    typer.echo(f"Input source  : {input_source.path if input_source else '(none)'}")
+    for source in [output] + ([input_source] if input_source else []):
+        report = rescan_source(registry, source)
+        typer.echo(f"[{source.kind}] {source.name}: indexed={report.rasters_indexed}")
+        if report.spatial_errors:
+            typer.echo(f"  {report.spatial_errors} raster file(s) skipped with errors.")
     typer.echo("Catalog rebuilt.")
 
 
 @app.command()
 def catalog() -> None:
-    """Rebuild only the DuckDB catalog from the existing Parquet store."""
-    from ecosim.catalog.build import build_catalog
+    """Rebuild only the DuckDB catalog from the existing per-source caches,
+    without re-scanning any raw files."""
+    from ecosim.ingestion.activation import combine_and_rebuild
 
-    build_catalog(_get_settings_or_exit())
+    registry, _output, _input_source = _active_sources_or_exit()
+    combine_and_rebuild(registry)
     typer.echo("Catalog rebuilt.")
 
 
@@ -114,9 +124,9 @@ def sources_list() -> None:
 def sources_add(name: str, path: str, kind: str = typer.Argument(..., help="'output' or 'input'")) -> None:
     """Register a new data source (does not activate/ingest it -- run `ecosim sources activate` next).
 
-    See docs/data-contract.md's "Oczekiwany układ katalogów źródłowych" for
-    the required folder layout (an 'output' or 'input' subfolder directly
-    inside the selected path, plus -- for output -- Mapa_grupy_fleets.xlsx).
+    Any folder works -- discovery scans recursively and matches on file
+    content, not folder name or nesting depth. See docs/data-contract.md's
+    "Oczekiwany układ katalogów źródłowych" for details.
     """
     from pathlib import Path
 
@@ -163,8 +173,8 @@ def sources_activate(source_id: str) -> None:
         f"Activated {source.id} ({source.name}, {source.kind}). "
         f"datasets={result.datasets} rows={result.rows} rasters_indexed={result.rasters_indexed}"
     )
-    if result.errors or result.spatial_errors:
-        typer.echo(f"  ({result.errors} timeseries file(s), {result.spatial_errors} spatial file(s) skipped)")
+    for warning in result.warnings:
+        typer.echo(f"  Warning: {warning}")
 
 
 @sources_app.command("remove")

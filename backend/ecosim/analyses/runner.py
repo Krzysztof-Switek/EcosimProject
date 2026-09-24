@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -82,7 +83,18 @@ def prepare_job(
     dict_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "out").mkdir(parents=True, exist_ok=True)
 
-    (job_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    # created_at/analysis_id: not part of the selection itself (that's the
+    # rest of the manifest), but recorded here rather than left to the job
+    # dir's own filesystem mtime -- that's fragile across backups/restores,
+    # and this is the one place every run already passes through, so future
+    # per-profile usage analytics (which analyses run, how often, when) has
+    # a durable source to read instead of needing a schema migration later.
+    manifest_with_meta = {
+        **manifest,
+        "analysis_id": spec.id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    (job_dir / "manifest.json").write_text(json.dumps(manifest_with_meta, indent=2), encoding="utf-8")
     (job_dir / "params.json").write_text(json.dumps(params, indent=2), encoding="utf-8")
 
     rows = rows_for_manifest(manifest, settings)
@@ -93,8 +105,6 @@ def prepare_job(
         )
     pd.DataFrame(rows).to_parquet(data_dir / "timeseries.parquet", index=False)
 
-    pd.DataFrame(service.list_groups(settings)).to_csv(dict_dir / "groups.csv", index=False)
-    pd.DataFrame(service.list_fleets(settings)).to_csv(dict_dir / "fleets.csv", index=False)
     pd.DataFrame(service.list_scenarios(settings)).to_csv(dict_dir / "scenarios.csv", index=False)
 
     return job_dir

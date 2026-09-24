@@ -167,8 +167,6 @@ def test_build_raster_index_flags_same_year_collision(tmp_path):
     # configured to write spatial maps more often than once a year. Our raster
     # id has no month dimension, so two .asc files landing in the same
     # (scenario, variable, entity, year) must be caught, not silently merged.
-    import shutil
-
     import pandas as pd
 
     from ecosim.core.config import Settings
@@ -176,7 +174,6 @@ def test_build_raster_index_flags_same_year_collision(tmp_path):
 
     raw = tmp_path / "raw"
     raw.mkdir(parents=True, exist_ok=True)
-    shutil.copy(RAW / "Mapa_grupy_fleets.xlsx", raw / "Mapa_grupy_fleets.xlsx")
 
     asc_dir = raw / "output" / "TestScenario" / "test scenario" / "asc"
     asc_dir.mkdir(parents=True, exist_ok=True)

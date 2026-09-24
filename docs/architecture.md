@@ -16,7 +16,7 @@ podfolder zamontowanego share'a sieciowego), NIEZALEŻNE:
   📥 input  (opcjonalne) — drivery/wymuszenia
    │  INGESTIA (Python): rejestr parserów → tidy
    ▼
-Kanoniczny STORE (data/)       KATALOG (DuckDB) — indeks do nawigacji
+Kanoniczny STORE (~/.ecosim/profiles/default/store/)  KATALOG (DuckDB) — indeks do nawigacji
   • timeseries/ (Parquet)  ◄────────────┘
   • spatial/ (COG + indeks)
   • dictionaries/ (groups, fleets, scenarios)
@@ -37,6 +37,14 @@ aktywacji którejkolwiek strony (nie ma per-źródłowego cache'a do sprzątania
 układ katalogów źródłowych: [`data-contract.md`](data-contract.md#oczekiwany-układ-katalogów-źródłowych)
 (walidowany przy rejestracji, nie tylko przy ingestii). Pełny opis procesu projektowego:
 [`Plans and TO_DO lists/27.08_data_upload_PLAN.md`](Plans%20and%20TO_DO%20lists/27.08_data_upload_PLAN.md).
+
+**Rejestr źródeł i kanoniczny store żyją poza drzewem projektu, pod katalogiem "profilu"**
+(`core/workspace.py::profile_dir()`, domyślnie `~/.ecosim/profiles/default/`) — nigdy w
+kodzie aplikacji. Dziś istnieje dokładnie jeden profil (`"default"`, brak jeszcze
+uwierzytelniania), ale cały kod już przechodzi przez `profile_dir(profile_id)`, więc
+podpięcie prawdziwego per-kontowego id (gdy powstanie auth) będzie zmianą tego, *skąd
+bierze się id*, nie przebudową układu katalogów. Patrz
+[`Plans and TO_DO lists/28.08_session_summary.md`](Plans%20and%20TO_DO%20lists/28.08_session_summary.md).
 
 ## Kanoniczny model
 

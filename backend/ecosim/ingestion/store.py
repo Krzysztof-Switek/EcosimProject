@@ -21,7 +21,7 @@ def _coerce(df: pd.DataFrame) -> pd.DataFrame:
         df[col] = df[col].astype("Int32")
     df["value"] = pd.to_numeric(df["value"], errors="coerce").astype("float64")
     for col in ("model", "model_name", "scenario", "domain", "variable", "freq", "date",
-                "group_name", "fleet_name", "partner_name", "unit"):
+                "group_name", "fleet_name", "partner_name", "unit", "run_id"):
         df[col] = df[col].astype("string")
     return df
 

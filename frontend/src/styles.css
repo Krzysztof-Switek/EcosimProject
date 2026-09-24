@@ -7,6 +7,7 @@
   --accent: #4e79a7;
   --accent-soft: #eaf1f8;
   --danger: #c0392b;
+  --warn: #9a6700;
   font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
@@ -19,6 +20,7 @@
   --accent: #6ea8d8;
   --accent-soft: #2a3744;
   --danger: #e06c5e;
+  --warn: #e3b341;
 }
 
 * { box-sizing: border-box; }
@@ -37,6 +39,11 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .app__bar-left { display: flex; align-items: center; gap: 10px; }
 .app__bar-right { display: flex; align-items: center; gap: 12px; }
 .app__sourcereadout { font-size: 12px; }
+.app__activation-pill { font-size: 12px; font-variant-numeric: tabular-nums; }
+.app__activation-error {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 0; border-radius: 0; border-left: none; border-right: none; border-top: none;
+}
 .btn {
   border: 1px solid var(--accent); background: var(--accent); color: #fff;
   font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 6px; cursor: pointer;
@@ -148,6 +155,13 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 }
 .badge--muted { background: var(--bg); color: var(--muted); }
 .badge--ok { background: rgba(47,125,93,0.12); color: #2f7d5d; }
+/* Data-kind badges (DataSourcePanel's "Indexed data" list) -- same icon
+   language as the Landing tiles (🗺️/📈/🎲), distinct tint per kind so the
+   four categories read apart from each other at a glance, not just by text. */
+.badge--kind-spatial { background: rgba(23,131,138,0.12); color: #17838a; }
+.badge--kind-timeseries { background: rgba(87,96,204,0.12); color: #5760cc; }
+.badge--kind-montecarlo { background: rgba(155,89,182,0.14); color: #8e44ad; }
+.badge--kind-mixed { background: rgba(180,130,20,0.14); color: #a5780f; }
 .badge--btn { border: none; cursor: pointer; font-family: inherit; flex-shrink: 0; }
 .badge--btn:hover { filter: brightness(0.97); text-decoration: underline; }
 .catalog__item.is-focused { box-shadow: inset 2px 0 0 var(--accent); }
@@ -214,6 +228,8 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .chip__x { border: none; background: transparent; color: inherit; cursor: pointer; font-size: 11px; padding: 0; }
 .btn--ghost { background: transparent; color: var(--accent); }
 .btn--ghost:hover { background: var(--accent-soft); }
+.btn--danger { border-color: var(--danger); background: var(--danger); }
+.btn--success { border-color: #2f7d5d; background: #2f7d5d; }
 
 /* per-variable chart card */
 .vchart { border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--panel); }
@@ -256,21 +272,26 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 /* landing (module choice) */
 .landing {
   flex: 1; display: flex; flex-direction: column; align-items: center;
-  justify-content: center; gap: 36px; padding: 32px; overflow-y: auto;
+  /* "safe center": centers when content fits, falls back to start-aligned
+     instead of clipping the top when it doesn't -- plain `center` on an
+     overflowing flex column pushes the beginning of the content past the
+     scrollable area's own start, which mattered before tiles were sized to
+     comfortably fit a single 1920x1080 screen without scrolling (2026-08-28),
+     kept as a safety net for smaller/zoomed viewports. */
+  justify-content: safe center; gap: 22px; padding: 20px; overflow-y: auto;
 }
 .landing__intro { text-align: center; }
-.landing__title { font-size: 28px; font-weight: 700; margin: 0 0 8px; }
 .landing__subtitle { color: var(--muted); margin: 0; font-size: 15px; }
-.landing__row { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.landing__row { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .landing__row-label {
   align-self: center; font-size: 11px; font-weight: 700; letter-spacing: .06em;
   text-transform: uppercase; color: var(--muted);
 }
 .landing__row-note { font-size: 13px; margin: 0; }
-.landing__tiles { display: flex; gap: 28px; flex-wrap: wrap; justify-content: center; }
+.landing__tiles { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; }
 .landing__tile {
-  display: flex; flex-direction: column; align-items: center; gap: 6px;
-  width: 260px; padding: 36px 24px; border: 1px solid var(--border); border-radius: 16px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  width: 200px; padding: 20px 16px; border: 1px solid var(--border); border-radius: 14px;
   background: var(--panel); color: var(--text); cursor: pointer; font-family: inherit;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); transition: transform .12s, box-shadow .12s, border-color .12s;
 }
@@ -278,21 +299,57 @@ body { margin: 0; background: var(--bg); color: var(--text); }
   transform: translateY(-3px); border-color: var(--accent);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
 }
-.landing__tile:disabled { cursor: default; opacity: 0.5; transform: none; box-shadow: none; }
-.landing__tile--upload { width: 220px; padding: 24px 20px; }
-.landing__icon { font-size: 56px; line-height: 1; margin-bottom: 6px; }
-.landing__tile--upload .landing__icon { font-size: 40px; position: relative; display: inline-block; }
+.landing__tile:disabled {
+  cursor: not-allowed; opacity: 0.4; transform: none; box-shadow: none;
+  filter: grayscale(0.7); background: var(--bg);
+}
+.landing__tile--upload { width: 180px; padding: 16px 14px; }
+.landing__tiles--single { max-width: 200px; margin: 0 auto; }
+.landing__tile--stub { cursor: default; opacity: 0.55; }
+.landing__tile--stub:hover { transform: none; border-color: var(--border); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); }
+.landing__icon { font-size: 40px; line-height: 1; margin-bottom: 4px; }
+.landing__tile--upload .landing__icon { font-size: 30px; position: relative; display: inline-block; }
 .landing__icon-arrow {
   position: absolute; right: -8px; bottom: -2px;
-  width: 18px; height: 18px; border-radius: 50%;
+  width: 16px; height: 16px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: 13px; font-weight: 900; line-height: 1;
-  color: #fff; background: #e0293e; box-shadow: 0 0 0 2px var(--panel);
+  font-size: 11px; font-weight: 900; line-height: 1;
+  color: #fff; background: var(--accent); box-shadow: 0 0 0 2px var(--panel);
 }
-.landing__tile-title { font-size: 18px; font-weight: 700; }
-.landing__tile--upload .landing__tile-title { font-size: 15px; }
-.landing__tile-desc { font-size: 13px; color: var(--muted); text-align: center; }
-.landing__tile-badge { margin-top: 8px; }
+.landing__tile-title { font-size: 15px; font-weight: 700; }
+.landing__tile--upload .landing__tile-title { font-size: 13px; }
+.landing__tile-desc { font-size: 12px; color: var(--muted); text-align: center; }
+.landing__tile-badge { margin-top: 6px; }
+
+.landing__tile-progress { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 8px; width: 100%; }
+.landing__tile-progress-track {
+  display: block; width: 100%; max-width: 200px; height: 6px; border-radius: 999px;
+  background: var(--bg); border: 1px solid var(--border); overflow: hidden;
+}
+.landing__tile-progress-bar { display: block; height: 100%; border-radius: 999px; background: var(--accent); transition: width 0.3s ease; }
+/* No known total yet (still discovering files) -- a calm "still alive" pulse,
+   not a sliding segment: a bar that visibly races across the track with no
+   real total behind it reads as broken/meaningless rather than "working".
+   The moving file count next to it (see activationLabel) carries the actual
+   evidence of progress during this phase. */
+.landing__tile-progress-bar--indeterminate { width: 100%; animation: landing-progress-pulse 1.8s ease-in-out infinite; }
+@keyframes landing-progress-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.9; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .landing__tile-progress-bar--indeterminate { animation: none; opacity: 0.6; }
+}
+
+/* DataSourcePanel's "already loading" blocking view -- same progress-bar
+   visual language as the Landing tile, but left-aligned in its own column
+   (not centered like the tile) since this is a full-width panel, not a
+   fixed-width card. */
+.datasource__blocking {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 14px; max-width: 780px; width: 100%;
+}
+.datasource__blocking .landing__tile-progress { align-items: flex-start; }
+.datasource__blocking .landing__tile-progress-track { max-width: 320px; }
 
 /* spatial map */
 .spatialmain { display: flex; flex-direction: column; height: 100%; gap: 10px; padding: 0; }
@@ -400,7 +457,59 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 
 /* data source picker */
 .datasource { flex: 1; overflow-y: auto; padding: 32px; display: flex; flex-direction: column; gap: 32px; align-items: flex-start; }
-.datasource__intro, .datasource__error, .datasource__section, .datasource__notice { max-width: 780px; width: 100%; }
+.datasource__intro, .datasource__error, .datasource__section, .datasource__loaded, .datasource__tabs { max-width: 780px; width: 100%; }
+.datasource__tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.datasource__tab {
+  border: none; background: transparent; color: var(--muted); cursor: pointer; font-family: inherit;
+  font-size: 14px; font-weight: 600; padding: 8px 4px; margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+}
+.datasource__tab:hover { color: var(--text); }
+.datasource__tab.is-active { color: var(--text); border-bottom-color: var(--accent); }
+.datasource__tabs .datasource__tab + .datasource__tab { margin-left: 16px; }
+.datasource__loaded-empty { padding: 4px 0; }
+/* No shared outer border any more (removed 2026-08-28) -- each row is its
+   own self-contained card below, so there's nothing left to wrap
+   collectively. Avoids the double-frame look a shared outer border +
+   a per-row active outline produced (gray card border sitting right next
+   to the green row border, ~2px apart -- confirmed visually, not a good
+   look). One row now genuinely has exactly one frame. */
+.datasource__loaded { display: flex; flex-direction: column; gap: 8px; }
+.datasource__loaded-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.datasource__loaded-row {
+  display: flex; flex-direction: column; gap: 4px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--panel);
+  padding: 10px 14px;
+}
+/* The currently-active source's card border turns green instead of the
+   plain default -- same single frame, just recolored, not a second one. */
+.datasource__loaded-row.datasource__loaded-row--active { border-color: #2f7d5d; }
+/* Title line spans the row's full width so the data-kind badge can dock to
+   its far right, level with the name -- not stacked separately below (user
+   request 2026-08-28: keep it "in the title, where RU_SSP1 and Active now
+   are, aligned right", not off in its own block by the action buttons). */
+.datasource__loaded-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.datasource__loaded-name { font-weight: 700; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.datasource__loaded-badge { font-size: 11px; flex-shrink: 0; }
+.datasource__loaded-path { font-size: 12px; overflow-wrap: anywhere; }
+.datasource__loaded-meta { font-size: 12px; }
+/* A failed scan's reason is the one thing the user must read to fix it --
+   full danger color, not muted, and wrapped so a long path stays readable. */
+.datasource__loaded-meta--error { color: var(--danger); overflow-wrap: anywhere; }
+/* "Not on this computer yet" -- information with a next step, not an
+   error: accent-toned, deliberately not the danger styling. */
+.datasource__notice { margin: 12px; padding: 12px 14px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); font-size: 13px; }
+.datasource__notice p { margin: 6px 0; }
+.datasource__notice-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.datasource__warnings { margin: 2px 0 0; padding-left: 18px; font-size: 12px; color: var(--warn); }
+.datasource__warnings li { overflow-wrap: anywhere; }
+.datasource__loaded-actions-row { display: flex; justify-content: flex-end; margin-top: 4px; }
+/* "Use this" sits apart from Rescan/Remove (bigger gap) so it reads as a
+   clearly distinct action, not a third peer in the same button group. */
+.datasource__loaded-actions { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.datasource__loaded-actions-group { display: flex; align-items: center; gap: 6px; }
+.datasource__loaded-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.datasource__loaded-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
 .datasource__title { font-size: 24px; font-weight: 700; margin: 0 0 6px; }
 .datasource__subtitle { color: var(--muted); margin: 0 0 10px; font-size: 14px; }
 .datasource__hint {
@@ -408,12 +517,6 @@ body { margin: 0; background: var(--bg); color: var(--text); }
   border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px;
 }
 .datasource__error { border: 1px solid var(--danger); border-radius: 8px; padding: 10px 14px; }
-.datasource__notice {
-  display: flex; align-items: center; justify-content: space-between; gap: 16px;
-  background: var(--accent-soft); border: 1px solid var(--border); border-radius: 8px;
-  padding: 12px 16px; font-size: 13px;
-}
-.datasource__notice p { margin: 0; }
 
 .datasource__pathrow { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .datasource__pathinput { flex: 2 1 280px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; }
@@ -425,13 +528,19 @@ body { margin: 0; background: var(--bg); color: var(--text); }
   background: var(--bg); border-bottom: 1px solid var(--border);
 }
 .datasource__breadcrumb span { flex: 1; word-break: break-all; }
-.datasource__usehere { flex-shrink: 0; }
 .datasource__folderlist { list-style: none; margin: 0; padding: 4px; max-height: 320px; overflow-y: auto; }
 .datasource__folderempty { padding: 12px; font-size: 13px; }
-.datasource__folderitem { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 6px; border-radius: 6px; }
+.datasource__folderitem { display: flex; align-items: center; padding: 2px 6px; border-radius: 6px; }
 .datasource__folderitem:hover { background: var(--bg); }
 .datasource__folderbtn {
   flex: 1; text-align: left; background: none; border: none; color: var(--text); font-family: inherit;
   font-size: 13px; padding: 6px 4px; cursor: pointer; display: flex; align-items: center; gap: 8px;
 }
 .datasource__hint-badge { font-size: 10px; }
+
+/* The single commit action for the folder browser -- always the current path. */
+.datasource__confirmbar {
+  display: flex; gap: 8px; align-items: center; padding: 10px 12px;
+  border-top: 1px solid var(--border); background: var(--bg);
+}
+.datasource__confirmbar .datasource__nameinput { flex: 1; }

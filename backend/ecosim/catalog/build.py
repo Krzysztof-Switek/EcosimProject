@@ -1,23 +1,39 @@
-"""Build the DuckDB catalog from the Parquet store and exported dictionaries.
+"""Build the DuckDB catalog from the Parquet store and exported dimension tables.
 
 The catalog is the navigable index the UI browses *before* running analyses:
 one row per (scenario, domain, variable, freq) dataset plus the dimension
-tables (groups, fleets, scenarios) and a ``timeseries`` view over the store.
+tables (scenarios, models) and a ``timeseries`` view over the store.
+
+``settings`` supplies the LIVE locations this reads/writes (``catalog_db``,
+``dictionaries_dir``, ``spatial_dir``) -- as of 2026-08-28 these are expected
+to already hold the *combined* dictionaries/raster_index.csv for whichever
+source(s) are currently active (built by ``ingestion.activation``'s
+``combine_and_rebuild``, which merges each active source's own per-source
+cache -- see ``core/config.py``'s module docstring -- before calling this;
+this function itself stays focused on DDL, not on knowing what "active"
+means). ``timeseries_dirs`` is the separate list of per-source
+``timeseries_dir``s the ``timeseries`` view unions over -- defaults to just
+``[settings.timeseries_dir]`` (today's single-store behavior) for simple
+callers/tests that don't need a multi-source union.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from ecosim.catalog.categories import CATEGORY_SQL
 from ecosim.core.config import Settings, get_settings
 from ecosim.core.db import connect, parquet_scan
 
 
-def build_catalog(settings: Settings | None = None) -> None:
+def build_catalog(settings: Settings | None = None, timeseries_dirs: list[Path] | None = None) -> None:
     settings = settings or get_settings()
+    if timeseries_dirs is None:
+        timeseries_dirs = [settings.timeseries_dir]
     dict_dir = settings.dictionaries_dir
     con = connect(settings)
     try:
-        con.execute(f"CREATE OR REPLACE VIEW timeseries AS SELECT * FROM {parquet_scan(settings)}")
+        con.execute(f"CREATE OR REPLACE VIEW timeseries AS SELECT * FROM {parquet_scan(timeseries_dirs)}")
 
         # Aggregate per dataset first (CTE), then derive the Results-Extractor
         # category from the already-aggregated dimension counts in an outer
@@ -48,8 +64,6 @@ def build_catalog(settings: Settings | None = None) -> None:
             """
         )
 
-        _load_dim(con, "dim_groups", dict_dir / "groups.csv")
-        _load_dim(con, "dim_fleets", dict_dir / "fleets.csv")
         _load_dim(con, "dim_scenarios", dict_dir / "scenarios.csv")
         _load_dim(con, "dim_models", dict_dir / "models.csv")
         _load_dim(con, "catalog_rasters", settings.spatial_dir / "raster_index.csv")

@@ -166,6 +166,39 @@ dwupoziomowym schemacie identyfikacji (patrz pamięć projektu: jeden model Ecop
 wiele scenariuszy Ecosim). To zgodne z tym, jak dokumentacja opisuje relację Ecopath→Ecosim
 (PM, wielokrotnie w rozdziałach wprowadzających) — bez rozjazdu.
 
+### Czy dane Ecopath da się eksportować do folderu plików? Zweryfikowane 28.08 — nie ma takiej konwencji
+
+Sprawdzone pod kątem realnej potrzeby: użytkownik chce opcjonalnie dodać "kafelek Ecopath",
+analogiczny do output/input. Przeszukane UG s.5-44 ("Ecopath Input", "Linked Stanza
+Recruitment", "Ecopath Output", "Ecopath Tools") oraz PM rozdz. 5-12 (s.39-80) pod kątem
+mechanizmu eksportu danych Ecopath do plików płaskich.
+
+**Wniosek: manual nie opisuje niczego takiego.** Jedyny udokumentowany sposób dzielenia się
+danymi Ecopath to eksport/import **całego modelu** przez Ecobase (zewnętrzne, internetowe
+repozytorium modeli): *"This can be done from the menu File > Export model > To Ecobase.
+Ecobase models are available at www.ecobase.ecopath.org and can also be downloaded directly
+from File > Import model > From Ecobase"* (UG s.6). Model Ecopath jest w obu podręcznikach
+konsekwentnie traktowany jako **jeden plik bazy danych** ("the database", liczba pojedyncza,
+PM ok. s.55 w sekcji tutorialowej) — nie zestaw wyeksportowanych tabel.
+
+Sekcja "Ecopath Output" (UG s.26-42) opisuje wyłącznie **formularze na ekranie wewnątrz
+aplikacji EwE** (Basic Estimates, Mortality Rates, panel Status), nigdy eksport do pliku:
+*"a suite of indicators are given in the Ecopath > Output forms, which is the topic of this
+chapter"* (UG s.26). "Ecopath Tools" (s.43-44) to wyłącznie diagram przepływów (Flow
+Diagram) — też brak narzędzi eksportu.
+
+**Brak też odpowiednika `<HEADER ecosim/>`/`RunInfo.txt`** — żadnej konwencji nazw
+plików/folderów per "przebieg" Ecopath, co ma sens: to model bez wymiaru czasu/przebiegu,
+nie ma czego tak nazywać.
+
+**Konsekwencja dla architektury tego projektu:** w przeciwieństwie do output/input, gdzie
+odkrywanie oparte o treść pliku miało realną podstawę w dokumentacji (nagłówki `<HEADER
+.../>`, `RunInfo.txt`), **tu takiej podstawy nie ma**. Zbudowanie "wskaż folder, appka sama
+znajdzie pliki Ecopath" byłoby wymyśleniem konwencji, której EwE nie ma — dokładnie to,
+przed czym ostrzega zasada [[ecosim-verify-against-ewe-docs]]. Jeśli wsparcie dla Ecopath
+ma powstać, musi mieć inny kształt niż istniejące dwa kafelki (np. pojedynczy plik, nie
+folder) — do ustalenia z realną próbką danych, nie z góry.
+
 ---
 
 ## 2. Ecosim — szeregi czasowe
@@ -247,11 +280,12 @@ ECOIND) — takich plików nie ma też w `DataEcosim/`. **Aktualizacja (27.08, t
 druga tura):** `_find_group_map()` w `pipeline.py`/`spatial_pipeline.py` **przestał być
 bezwarunkowy** — realny użytkownik trafił na folder z prawdziwymi wynikami Monte Carlo, gdzie
 słownik był trzymany osobno, i dostał odrzucenie cytujące plik, o którym EwE nigdy nie
-słyszało. Naprawione: `run_ingest()`/`build_raster_index()` używają teraz
-`Dictionaries.empty()`, gdy słownika nie znajdą — `group_id`/`fleet_id` (prawdziwe dane) są
-zachowane, tylko kolumny `*_name` zostają puste; nazwy rastrów i tak są odczytywane wprost z
-nazwy pliku (patrz `asc_grid.py`), więc dane przestrzenne w ogóle tego nie odczuwają. Patrz
-`ingestion/parsers/group_map.py:Dictionaries.empty()` i sekcja "Rozjazdy" niżej.
+słyszało. Naprawione (27.08): `run_ingest()`/`build_raster_index()` przestały wymagać słownika —
+`group_id`/`fleet_id` (prawdziwe dane) zachowane, tylko kolumny `*_name` puste; nazwy
+rastrów i tak odczytywane wprost z nazwy pliku, więc dane przestrzenne w ogóle tego nie
+odczuwają. **Druga tura (28.08):** cały mechanizm (plik, `group_map.py`, powiązany endpoint
+API) usunięty z rdzenia całkowicie, nie tylko uczyniony opcjonalnym — patrz sekcja
+"Rozjazdy" niżej i `docs/Plans and TO_DO lists/28.08_session_summary.md`.
 
 ### Struktura katalogów wyjściowych EwE — nie ma jednej, ponownie zweryfikowane 27.08
 
@@ -475,11 +509,17 @@ s.20, "muszą mieć wyższy numer grupy niż ostatnia grupa żywa"). Świeży, p
 zaczyna z dokładnie jedną grupą — Detritus (PM s.171) — ale to tylko stan startowy, nie
 gwarancja że detrytus zawsze ma numer 1 w gotowym modelu.
 
-**To dokładnie potwierdza słuszność naszej architektury**: zamiast zakładać jakąkolwiek
-uniwersalną konwencję numeracji, używamy osobnego, dostarczonego przez modelera pliku
-(`Mapa_grupy_fleets.xlsx`) jako jedynego źródła prawdy ID↔nazwa
-(`group_map.py:Dictionaries`) — to jest dokładnie podejście, przed którego brakiem
-oficjalna dokumentacja ostrzega. Brak rozjazdu — to zgodne z zaleceniem.
+**To potwierdza, dlaczego nie da się bezpiecznie zgadywać numeracji** — dokładnie zgodnie z
+ostrzeżeniem manuala. Wcześniej (do 27.08) obsługiwaliśmy to osobnym, dostarczonym przez
+modelera plikiem (`Mapa_grupy_fleets.xlsx`) jako jedynym źródłem prawdy ID↔nazwa. Ten
+mechanizm został **całkowicie usunięty 2026-08-28** (patrz
+`docs/Plans and TO_DO lists/28.08_session_summary.md`) — mylił użytkowników co do tego, co
+jest strukturą EwE a co dodatkiem tego projektu, i z definicji jest specyficzny dla
+użytkownika/instalacji, nie dla całej aplikacji. Dziś `group_id`/`fleet_id` są zawsze
+zachowane z surowych danych; nazwa rozwiązuje się tylko tam, gdzie EwE samo ją zapisuje
+(nazwa pliku `.asc`, nagłówki kolumn w kształcie wide-by-name) — w przeciwnym razie zostaje
+`null`. Jeśli słownik ID↔nazwa kiedyś wróci, ma żyć w katalogu profilu użytkownika, nie być
+skanowany z surowego folderu danych.
 
 ---
 
@@ -487,6 +527,7 @@ oficjalna dokumentacja ostrzega. Brak rozjazdu — to zgodne z zaleceniem.
 
 | Obszar | Status | Co dokładnie |
 |---|---|---|
+| Czy dane Ecopath mają eksportowalną-do-folderu konwencję (jak output/input) | ℹ️ Zweryfikowane 28.08 — nie mają | Jedyny udokumentowany eksport to całego modelu przez Ecobase (UG s.6); "Ecopath Output" (s.26-42) to wyłącznie formularze w aplikacji, nie pliki. Brak odpowiednika `<HEADER ecosim/>`/`RunInfo.txt`. Wniosek: folder-discovery tile jak dla output/input nie ma podstawy w dokumentacji — inny kształt wsparcia potrzebny, jeśli w ogóle |
 | Format `.asc` (nagłówek, orientacja) | ✅ Zgodne | Standardowy ESRI ASCII Grid, orientacja NW→SE, potwierdzone na realnym pliku |
 | Konwencja nazw plików z krokiem czasowym | ✅ Zgodne | To natywna konwencja EwE, nie nasze obejście |
 | Projekcja WGS84 + tapering przez szerokość | ✅ Zgodne | Potwierdza założenia za naprawą Mercatora z 25.08 |
@@ -498,7 +539,7 @@ oficjalna dokumentacja ostrzega. Brak rozjazdu — to zgodne z zaleceniem.
 | Ecospace mógł zapisywać mapy częściej niż raz na rok | ✅ Zabezpieczone 27.08 | UG s.182 wprost potwierdza tę możliwość (miesięczny zapis); nasz `id` rastra nie ma wymiaru miesiąca — `build_raster_index()` teraz wykrywa i zgłasza kolizję zamiast cicho gubić dane; pełne wsparcie miesięcznej częstotliwości NIE zbudowane (brak danych, byłaby to spekulacja) |
 | Monte Carlo / Multi-sim / Ecosampler | ⏳ Nie zaimplementowane | Brak danych w `DataEcosim/` na razie; wzorzec "folder na przebieg" udokumentowany wyżej pod przyszłą implementację; wymaga nowego wymiaru `run_id` w schemacie |
 | Jednostki (`unit`) w eksporcie Ecosim | ℹ️ Nieudokumentowane | Ani UG, ani PM nie precyzują — nie nasz błąd, po prostu luka w oficjalnych materiałach |
-| Wymóg `Mapa_grupy_fleets.xlsx` był bezwarunkowy w naszym pipeline | ✅ Naprawione 27.08 (druga runda) | Prawdziwy bug użytkownika: realny folder Monte Carlo odrzucony, bo słownik leżał gdzie indziej. `Mapa_grupy_fleets.xlsx` to nasza własna konwencja do rozwiązywania id→nazwa, nie artefakt EwE — żaden fragment UG/PM go nie wymaga. Teraz opcjonalny wszędzie (`Dictionaries.empty()`); bez niego rastry biorą nazwę wprost z nazwy pliku (natywnie opisowej), a CSV zachowuje id z nazwą `null`. Pokryte `test_optional_dictionary.py` |
+| Wymóg `Mapa_grupy_fleets.xlsx` był bezwarunkowy w naszym pipeline | ✅ Usunięte całkowicie 28.08 | Prawdziwy bug użytkownika: realny folder Monte Carlo odrzucony, bo słownik leżał gdzie indziej. `Mapa_grupy_fleets.xlsx` to była nasza własna konwencja do rozwiązywania id→nazwa, nie artefakt EwE — żaden fragment UG/PM go nie wymaga. Po pierwszej naprawie (27.08, opcjonalny) użytkownik poszedł krok dalej: cały mechanizm (plik, `group_map.py`, endpoint `/dictionaries/groups\|fleets`, pole `group_dictionary_found`) usunięty z rdzenia aplikacji — rastry biorą nazwę wprost z nazwy pliku (natywnie opisowej), CSV wide-by-name z nagłówków kolumn, pozostałe kształty zachowują id z nazwą `null`. Przyszły słownik ID↔nazwa, jeśli powstanie, ma żyć per-profil użytkownika, nie być skanowany z surowych danych. Pokryte `test_group_fleet_naming.py` |
 | Wymóg konkretnej nazwy/głębokości folderu (`output/`, `ecosim_<scenario>/`) | ✅ Naprawione 27.08 (druga runda) | Drugi, głębszy bug: walidacja i odkrywanie zakładały stały układ folderów wzorowany na jednym przykładzie z `DataEcosim/`. Świeża weryfikacja UG s.50-51/79-81/265/275 (agent fork) potwierdziła: lokalizacja output EwE to w pełni konfigurowalne ustawienie użytkownika, **bez żadnej udokumentowanej/stałej nazwy folderu**. Odkrywanie przepisane na w pełni rekurencyjne i oparte o treść pliku (nagłówek `EcosimScenario` w CSV, obecność `Ecospace RunInfo.txt` przy `.asc`), nie o nazwę/głębokość folderu. Pokryte `test_source_validation.py` (m.in. `..._also_accepts_pointing_directly_at_output_subfolder`, dowodzi że "wskazanie o jeden poziom za nisko/wysoko" już nie jest błędem) |
 
 Ten dokument powstał jako czysta analiza (patrz plan sesji z 27.08); jedyny punkt z

@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 
 from ecosim.catalog import service
 from ecosim.core.config import get_settings
+from ecosim.ingestion.file_access import UnreadableFileError
 from ecosim.ingestion.spatial_pipeline import materialize_raster
 
 router = APIRouter(prefix="/spatial", tags=["spatial"])
@@ -39,5 +40,8 @@ def raster_file(raster_id: str) -> FileResponse:
     row = service.get_raster(raster_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Raster not found")
-    path = materialize_raster(row, get_settings())
+    try:
+        path = materialize_raster(row, get_settings())
+    except UnreadableFileError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return FileResponse(path, media_type="image/tiff")

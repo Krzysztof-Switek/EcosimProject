@@ -35,9 +35,25 @@ from pathlib import Path
 import pandas as pd
 
 from ecosim.core.schema import TIMESERIES_COLUMNS, slugify
-from ecosim.ingestion.parsers.group_map import Dictionaries
 
 _DEFAULT_START_YEAR = 1998
+
+
+class UnsupportedCsvShape(ValueError):
+    """Raised when a ``.csv`` has a real ``EcosimScenario`` header (so
+    discovery included it -- see ``pipeline._discover_output``) but no
+    ``Data,<Label>`` marker anywhere in it -- not a genuine Ecosim tidy-CSV
+    export. Two confirmed real cases (``RU_SSP1``, 2026-08-28), both
+    recognisable purely by this structural absence, no filename-guessing
+    needed: Ecospace's own "export map as CSV" (a raw grid dump, marked
+    ``Variable,<name>`` instead -- duplicate of the already-fully-indexed
+    ``.asc`` raster of the same data, see ``spatial_pipeline.py``) and
+    per-region age-structure breakdowns (marked only ``Max Age,<n>`` -- a
+    genuinely different, richer shape -- Timestep x Region x age-cohort --
+    not yet representable in this project's tidy schema, a real future
+    feature, not a bug). A distinct type from a generic parse failure so
+    ``ingestion.pipeline.run_ingest`` can skip these cleanly instead of
+    counting them as errors alongside actually-broken files."""
 
 
 @dataclass
@@ -89,16 +105,19 @@ def _parse_header_block(rows: list[list[str]]) -> tuple[dict[str, str], int]:
     return meta, end
 
 
-def _find_data_section(rows: list[list[str]], start: int) -> tuple[str | None, int]:
-    """Find the ``Data,<Label>`` marker; return (label, index of header row)."""
-    label = None
+def _find_data_section(rows: list[list[str]], start: int) -> tuple[str | None, int | None]:
+    """Find the ``Data,<Label>`` marker; return (label, index of first real
+    data row). ``hdr_idx`` is ``None`` when no ``Data,`` marker exists
+    anywhere in the file -- see ``UnsupportedCsvShape``, which this signals
+    to ``parse_ecosim_csv``'s caller."""
     for i in range(start, len(rows)):
         if rows[i] and rows[i][0].strip() == "Data":
             label = rows[i][1].strip() if len(rows[i]) > 1 else None
             for j in range(i + 1, len(rows)):
                 if any(cell.strip() for cell in rows[j]):
                     return label, j
-    return label, start
+            return label, None  # "Data" marker present but no rows follow it
+    return None, None
 
 
 def _variable_and_target(path: Path) -> tuple[str, str, str | None]:
@@ -154,16 +173,22 @@ def _period(freq: str, time_value: pd.Series, start_year: int) -> pd.DataFrame:
 
 def parse_ecosim_csv(
     path: Path,
-    dicts: Dictionaries,
     *,
     scenario: str,
     model: str | None = None,
     model_name: str | None = None,
     domain: str = "output",
+    run_id: str | None = None,
 ) -> tuple[EcosimCsvMeta, pd.DataFrame]:
     rows = _read_rows(path)
     headers, after_header = _parse_header_block(rows)
     data_label, hdr_idx = _find_data_section(rows, after_header)
+    if hdr_idx is None:
+        raise UnsupportedCsvShape(
+            f"{path.name}: no 'Data,<label>' section -- not a standard Ecosim "
+            "tidy-CSV export (e.g. an Ecospace map-as-CSV or a region/age-"
+            "structure breakdown); skipped, not a parse error."
+        )
     variable, freq_hint, target = _variable_and_target(path)
     start_year = int(headers.get("StartYear", _DEFAULT_START_YEAR))
     # Fall back to the authoritative Ecopath ModelName from the header block.
@@ -185,11 +210,11 @@ def parse_ecosim_csv(
     if not data_rows:
         df = pd.DataFrame(columns=TIMESERIES_COLUMNS)
     elif first in {"year", "timestep"} and header_row[1:4] == ["fleet", "group", "value"]:
-        df = _parse_long(header_row, data_rows, freq, start_year, dicts)
+        df = _parse_long(header_row, data_rows, freq, start_year)
     elif len(header_row) == 2 and header_row[1].lower() == "value":
         df = _parse_single(data_rows, freq, start_year)
     elif first.endswith("\\group"):
-        df = _parse_wide(header_row, data_rows, freq, start_year, dicts, target)
+        df = _parse_wide(header_row, data_rows, freq, start_year, target)
     else:
         raise ValueError(f"Unrecognised Ecosim CSV layout in {path.name}: header={header_row[:5]}")
 
@@ -200,6 +225,7 @@ def parse_ecosim_csv(
     df["variable"] = variable
     df["freq"] = freq
     df["unit"] = data_label
+    df["run_id"] = run_id
     return meta, df.reindex(columns=TIMESERIES_COLUMNS)
 
 
@@ -216,18 +242,19 @@ def _parse_single(data_rows, freq, start_year) -> pd.DataFrame:
     return out
 
 
-def _parse_long(header_row, data_rows, freq, start_year, dicts: Dictionaries) -> pd.DataFrame:
+def _parse_long(header_row, data_rows, freq, start_year) -> pd.DataFrame:
     raw = _frame(data_rows, 4, ["t", "fleet_id", "group_id", "value"])
     out = _period(freq, raw["t"], start_year)
     out["fleet_id"] = pd.to_numeric(raw["fleet_id"], errors="coerce").astype("Int64")
     out["group_id"] = pd.to_numeric(raw["group_id"], errors="coerce").astype("Int64")
     out["value"] = pd.to_numeric(raw["value"], errors="coerce")
-    out["fleet_name"] = out["fleet_id"].map(_id_to_name(dicts.fleets))
-    out["group_name"] = out["group_id"].map(_id_to_name(dicts.groups))
+    # EwE's own long-shape export carries only numeric fleet/group ids, no
+    # names anywhere in the file -- fleet_name/group_name are left unset here
+    # and come back null via the TIMESERIES_COLUMNS reindex in the caller.
     return out
 
 
-def _parse_wide(header_row, data_rows, freq, start_year, dicts, target) -> pd.DataFrame:
+def _parse_wide(header_row, data_rows, freq, start_year, target) -> pd.DataFrame:
     ncols = len(header_row)
     time_col, *value_cols = header_row
     value_cols = [c for c in value_cols if c.strip()]
@@ -243,18 +270,16 @@ def _parse_wide(header_row, data_rows, freq, start_year, dicts, target) -> pd.Da
 
     if all(c.strip().isdigit() for c in value_cols):  # wide-by-id
         out["group_id"] = pd.to_numeric(long["col"], errors="coerce").astype("Int64")
-        out["group_name"] = out["group_id"].map(_id_to_name(dicts.groups))
+        # No name anywhere in a wide-by-id file (bare numeric column headers)
+        # -- group_name stays null via the caller's reindex.
     else:  # wide-by-name (predation): column = predator (partner)
-        target_id = dicts.group_id_by_name(target) if target else None
-        target_name = dicts.group_name(target_id) if target_id is not None else target
-        out["group_id"] = target_id
-        out["group_name"] = target_name
-        name_to_id = {row["slug"]: int(row["id"]) for _, row in dicts.groups.iterrows()}
-        slug = long["col"].map(slugify)
-        out["partner_id"] = slug.map(name_to_id).astype("Int64")
+        # Unlike wide-by-id, this shape carries real names directly in the
+        # file -- the target species is named in the filename itself
+        # (predation_<prey>.csv) and each partner is named in its own column
+        # header, so both resolve fully with no external lookup at all.
+        # Only the corresponding numeric ids have no source and stay null.
+        out["group_id"] = None
+        out["group_name"] = target
+        out["partner_id"] = None
         out["partner_name"] = long["col"].values
     return out
-
-
-def _id_to_name(dim: pd.DataFrame) -> dict[int, str]:
-    return {int(r["id"]): str(r["name"]) for _, r in dim.iterrows()}

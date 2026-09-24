@@ -1,4 +1,4 @@
-"""Catalog & dictionary endpoints — the navigable index for the UI."""
+"""Catalog endpoints — the navigable index for the UI."""
 
 from __future__ import annotations
 
@@ -29,16 +29,3 @@ def tree() -> list[dict]:
 @router.get("/datasets")
 def datasets(scenario: str | None = None) -> list[dict]:
     return service.list_datasets(scenario=scenario)
-
-
-dict_router = APIRouter(prefix="/dictionaries", tags=["dictionaries"])
-
-
-@dict_router.get("/groups")
-def groups() -> list[dict]:
-    return service.list_groups()
-
-
-@dict_router.get("/fleets")
-def fleets() -> list[dict]:
-    return service.list_fleets()

@@ -16,11 +16,33 @@ tests and scripts still build it directly
 ``get_settings()``, the thing routers/CLI actually call, resolves the active
 workspace sources.
 
-The canonical store is a single, always-freshly-rebuilt location (not
-namespaced per source) -- switching which source is active always re-runs
-ingestion (same cost as today's "Reload Data"), in exchange for there being
-exactly one store directory ever, never a growing pile of per-combination
-caches to clean up.
+Two layers (added 2026-08-28, real trigger: a genuine ~400GB/~1hr source had to
+be fully re-ingested just to switch back to it):
+
+* **Per-source cache** -- each registered source gets its own private,
+  independently-cached ingest output at ``source_cache_dir(source.id)``
+  (``profile_dir()/store/sources/<source_id>/``), built by pointing
+  ``settings_for_single_source()`` (only ONE of output/input set) at the
+  same ``run_ingest``/``build_raster_index`` used everywhere else. Re-
+  activating a source whose cache is still present on disk skips raw-file
+  ingestion entirely (see ``ingestion.activation``'s cache-validity check)
+  -- this is what makes switching between two already-scanned sources
+  instant instead of a full rescan. Never invalidated automatically: only
+  an explicit user-triggered Rescan (one source at a time, never "all")
+  overwrites a source's own cache slot.
+* **Live combined store** -- ``store_dir`` itself (unchanged location/shape
+  from before this existed: ``timeseries/``, ``spatial/`` incl. the COG
+  cache, ``dictionaries/``, ``catalog/catalog.duckdb``, ``jobs/``) is cheaply
+  rebuilt (no raw-file I/O, just small-CSV concatenation + pointing DuckDB
+  at a list of per-source Parquet directories) from whichever source(s) are
+  currently active, every time activation/rescan/removal changes that set.
+
+That store directory (both the live combined one and each source's cache
+slot under it) lives under the active profile's own directory
+(``core.workspace.profile_dir()``, default ``~/.ecosim/profiles/default/store``)
+-- never inside the project's own code tree. It's generated/derived state
+(same status as the workspace registry, not source-controlled), so it
+belongs with the user's own data, not bundled with the app.
 """
 
 from __future__ import annotations
@@ -30,7 +52,7 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from ecosim.core.workspace import DataSource, NoActiveDataSourceError, get_workspace_registry
+from ecosim.core.workspace import DataSource, NoActiveDataSourceError, get_workspace_registry, profile_dir
 
 # backend/ecosim/core/config.py -> project root is three parents up.
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -55,8 +77,11 @@ class Settings(BaseSettings):
     output_raw_dir: Path | None = None
     input_raw_dir: Path | None = None
 
-    # Canonical, regenerable store produced by the ingestion pipeline.
-    store_dir: Path = Field(default=_PROJECT_ROOT / "data")
+    # Canonical, regenerable store produced by the ingestion pipeline --
+    # lives under the profile directory, not the project root (see module
+    # docstring). default_factory (not a plain default) since it must be
+    # evaluated per-instantiation, not once at class-definition time.
+    store_dir: Path = Field(default_factory=lambda: profile_dir() / "store")
 
     @property
     def timeseries_dir(self) -> Path:
@@ -101,6 +126,52 @@ class Settings(BaseSettings):
 
 def settings_for_sources(output: DataSource, input_source: DataSource | None) -> Settings:
     return Settings(output_raw_dir=output.path, input_raw_dir=input_source.path if input_source else None)
+
+
+def source_cache_dir(source_id: str) -> Path:
+    """Where one source's own, independently-cached ingest output lives --
+    see this module's docstring's "Per-source cache" note. Pure path
+    builder (no registry lookup, no I/O) so it's cheap to call from
+    anywhere that just needs to check/build/delete a source's cache slot."""
+    return profile_dir() / "store" / "sources" / source_id
+
+
+def dir_size_bytes(path: Path) -> int:
+    """Total size on disk of every file under ``path``, recursively -- used
+    to show disk-space usage per source in the "Indexed data" panel (see
+    ``api/routers/sources.py::SourceOut.cache_size_bytes``). ``0`` for a
+    directory that doesn't exist (a source never scanned yet). Cheap in
+    practice: a source's cache holds the already-normalised, aggregated
+    output of ingestion (one Parquet file per scenario/domain/variable/freq,
+    plus a handful of index/dictionary CSVs) -- dozens of files, not the
+    hundreds of thousands a raw source folder can have -- confirmed on a
+    real ~400GB source's cache: 46 files, walked in ~64ms. Safe to call
+    synchronously per source on every ``GET /admin/sources`` (called
+    infrequently -- page load, after an operation finishes -- never in a
+    tight poll loop)."""
+    if not path.exists():
+        return 0
+    total = 0
+    for f in path.rglob("*"):
+        if f.is_file():
+            try:
+                total += f.stat().st_size
+            except OSError:
+                pass  # vanished mid-walk (e.g. a concurrent Remove) -- skip it
+    return total
+
+
+def settings_for_single_source(source: DataSource) -> Settings:
+    """Settings for ingesting exactly ONE source in isolation into its own
+    cache slot -- only the raw dir matching ``source.kind`` is set, the
+    other stays ``None`` (safe: ``run_ingest``/``build_raster_index`` both
+    skip a domain whose raw dir is ``None``). Used by
+    ``ingestion.activation`` to populate/refresh one source's cache without
+    ever touching another source's."""
+    store_dir = source_cache_dir(source.id)
+    if source.kind == "output":
+        return Settings(output_raw_dir=source.path, input_raw_dir=None, store_dir=store_dir)
+    return Settings(output_raw_dir=None, input_raw_dir=source.path, store_dir=store_dir)
 
 
 def get_settings() -> Settings:
