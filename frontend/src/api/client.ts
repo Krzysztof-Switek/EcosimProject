@@ -37,9 +37,12 @@ export class ApiError extends Error {
   }
 }
 
-async function postJson<T>(path: string, body?: unknown): Promise<T> {
+const postJson = <T,>(path: string, body?: unknown) => sendJson<T>("POST", path, body);
+const putJson = <T,>(path: string, body?: unknown) => sendJson<T>("PUT", path, body);
+
+async function sendJson<T>(method: "POST" | "PUT", path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
+    method,
     ...(body !== undefined
       ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
       : {}),
@@ -149,6 +152,9 @@ export const api = {
     getJson<ActivationStatus>(`/admin/sources/${encodeURIComponent(id)}/activation-status`),
   cancelActivation: (id: string) =>
     postJson<{ status: string; source_id: string }>(`/admin/sources/${encodeURIComponent(id)}/activation-cancel`),
+  // The CRS a source's maps are really in (null = as EwE declares) -- see MapCrsMismatch.
+  setMapCrs: (id: string, mapCrs: string | null) =>
+    putJson<DataSource>(`/admin/sources/${encodeURIComponent(id)}/map-crs`, { map_crs: mapCrs }),
   removeSource: (id: string) => deleteJson<{ status: string }>(`/admin/sources/${encodeURIComponent(id)}`),
   browse: (path?: string) => {
     const q = path ? `?path=${encodeURIComponent(path)}` : "";

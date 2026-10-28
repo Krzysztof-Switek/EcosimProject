@@ -369,21 +369,23 @@ def build_raster_index(
     return report
 
 
-def materialize_raster(row: dict, settings: Settings | None = None) -> Path:
+def materialize_raster(row: dict, settings: Settings | None = None, *, map_crs: str | None = None) -> Path:
     """Ensure the COG for one raster-index row exists on disk; return its path.
 
     Converts from the raw ``.asc`` (``row['source_path']``, an absolute path)
     only on first call for a given raster -- every call after that just
     returns the already-cached file. This is the single lazy-cache
     chokepoint, used by the ``/spatial/raster/{id}`` endpoint and, later, by
-    the R job-sandbox prep step.
+    the R job-sandbox prep step. ``map_crs`` is the owning data source's
+    user-set CRS (``DataSource.map_crs``); changing it must go with
+    ``clear_materialized`` so no COG converted under the old one is served.
     """
     settings = settings or get_settings()
     out_path = settings.spatial_dir / row["path"]
     if not out_path.exists():
         src = Path(row["source_path"])
         try:
-            write_cog(src, out_path, source_crs_wkt=row.get("source_crs_wkt"))
+            write_cog(src, out_path, source_crs_wkt=row.get("source_crs_wkt"), map_crs=map_crs)
         except Exception as exc:
             # A cloud-only .asc (see file_access.py) fails deep inside
             # rasterio with an unhelpful message -- say what's actually wrong.
@@ -393,6 +395,18 @@ def materialize_raster(row: dict, settings: Settings | None = None) -> Path:
                 raise UnreadableFileError(describe_read_error(exc, src)) from exc
             raise
     return out_path
+
+
+def clear_materialized(spatial_dir: Path, domain: str) -> int:
+    """Delete every cached COG of one ``domain`` ("output"/"input") so the
+    next request converts afresh -- needed when the CRS they were converted
+    with changes. Only derived files go: the raw ``.asc`` and the raster index
+    stay. Returns how many files were removed."""
+    removed = 0
+    for path in spatial_dir.glob(f"scenario=*/domain={domain}/**/*.tif"):
+        path.unlink()
+        removed += 1
+    return removed
 
 
 def _export_index(rows: list[dict], spatial_dir: Path) -> None:

@@ -188,6 +188,22 @@ export interface DataSource {
   // What the last successful scan found but did NOT load (unrecognised map
   // files, unsupported CSV shapes, unreadable files) -- one sentence each.
   scan_warnings: string[];
+  // CRS the user set for this source's maps (e.g. "EPSG:3035"); null = as EwE declares.
+  map_crs: string | null;
+}
+
+/** 422 detail from GET /spatial/raster/{id} when a map's coordinates can't be
+ * in the CRS it is taken to be in (e.g. metres declared as WGS 84 degrees). */
+export interface MapCrsMismatch {
+  code: "map_crs_mismatch";
+  message: string;
+  source_id: string | null;
+  source_name: string | null;
+  crs: string;
+  bounds: [number, number, number, number];
+  // Shortlist to choose from, each with the [west, south, east, north] extent
+  // in degrees it would give (null = can't be placed on the globe).
+  candidates: { crs: string; name: string; extent: [number, number, number, number] | null }[];
 }
 
 export interface BrowseEntry {

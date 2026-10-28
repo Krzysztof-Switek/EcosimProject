@@ -261,12 +261,20 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
     setPlaying(false);
   }, [scenario]);
 
-  const toggleVariableSelected = (v: string) =>
-    setSelectedVariables((prev) => {
-      const next = new Set(prev);
-      next.has(v) ? next.delete(v) : next.add(v);
-      return next;
-    });
+  // Checking a variable also shows it on the map -- checking it and seeing
+  // nothing happen read as broken. Unchecking the one on the map moves the map
+  // to another still-checked variable (or clears it if none is left).
+  const toggleVariableSelected = (v: string) => {
+    const next = new Set(selectedVariables);
+    if (next.has(v)) {
+      next.delete(v);
+      if (variable === v) setVariable(next.values().next().value ?? null);
+    } else {
+      next.add(v);
+      setVariable(v);
+    }
+    setSelectedVariables(next);
+  };
 
   // Clicking a variable's name shows it on the map; it's implicitly marked
   // (checked) too, since viewing something usually means you care about it --
@@ -682,6 +690,7 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
         {!scenario && (
           <div className="muted pad">Pick a scenario, then a variable, to see a map.</div>
         )}
+        {scenario && !variable && <div className="muted pad">Pick a variable (step 2) to see a map.</div>}
         {scenario && variable && (
           <>
             {(selectedVariables.size > 1 || visibleSelectedEntities.length > 1) && (

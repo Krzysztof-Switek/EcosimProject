@@ -60,6 +60,8 @@ class SourceOut(BaseModel):
     # ingestion.activation.ActivationResult.warnings. Empty when everything
     # found was loaded (and for scans recorded before this field existed).
     scan_warnings: list[str] = []
+    # User-set CRS of this source's maps (see DataSource.map_crs); None = as EwE declares.
+    map_crs: str | None = None
 
     @classmethod
     def from_source(cls, source: DataSource, *, active: bool) -> "SourceOut":
@@ -78,6 +80,7 @@ class SourceOut(BaseModel):
             scan_duration_seconds=source.scan_duration_seconds,
             cache_size_bytes=dir_size_bytes(source_cache_dir(source.id)),
             scan_warnings=scan_warnings(source.id) if source.status == "ok" else [],
+            map_crs=source.map_crs,
         )
 
 
@@ -218,6 +221,42 @@ def activate_source_endpoint(source_id: str) -> dict:
         )
     start_activation(registry, source)
     return {"status": "started", "source_id": source_id}
+
+
+class MapCrsIn(BaseModel):
+    map_crs: str | None  # e.g. "EPSG:3035"; null = back to the CRS EwE declares
+
+
+@router.put("/sources/{source_id}/map-crs")
+def set_map_crs_endpoint(source_id: str, body: MapCrsIn) -> SourceOut:
+    """Set the coordinate system this source's Ecospace maps are really in
+    (see ``DataSource.map_crs``). Every map already converted under the old
+    one is deleted from the cache (derived files only), so the next request
+    converts it afresh. No rescan needed -- the raster index doesn't change."""
+    from rasterio.crs import CRS
+    from rasterio.errors import CRSError
+
+    from ecosim.core.config import get_settings
+    from ecosim.ingestion.spatial_pipeline import clear_materialized
+
+    registry = get_workspace_registry()
+    source = registry.get(source_id)
+    if source is None:
+        raise HTTPException(404, f"Unknown data source: {source_id}")
+    map_crs = body.map_crs.strip() if body.map_crs else None
+    if map_crs:
+        try:
+            crs = CRS.from_user_input(map_crs)
+        except CRSError as exc:
+            raise HTTPException(422, f"Not a coordinate system this app knows: {map_crs!r} ({exc})") from exc
+        if crs.to_epsg():
+            map_crs = f"EPSG:{crs.to_epsg()}"
+    registry.set_map_crs(source_id, map_crs)
+    active = registry.active(source.kind)
+    is_active = active is not None and active.id == source_id
+    if is_active:  # the live store's COG cache only ever holds the active sources' maps
+        clear_materialized(get_settings().spatial_dir, source.kind)
+    return SourceOut.from_source(registry.get(source_id), active=is_active)
 
 
 @router.post("/sources/{source_id}/rescan")

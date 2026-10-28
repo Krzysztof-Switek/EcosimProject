@@ -242,7 +242,10 @@ def list_raster_layers(settings: Settings | None = None) -> list[dict]:
     """Spatial layers available per (model, scenario): one row per variable.
 
     Mirrors :func:`get_scenario_tree` but for the raster store — the index the
-    UI browses before picking a year to render.
+    UI browses before picking a year to render. Groups/fleets are counted by
+    id *or* name: map rasters carry only the name (it's in the ``.asc``
+    filename, e.g. ``EcospaceMapBiomass-Acartia sp.-00001.asc``) and no id,
+    so counting ids alone reported 0 groups and the map's group step vanished.
     """
     settings = settings or get_settings()
     with _ro(settings) as con:
@@ -251,7 +254,8 @@ def list_raster_layers(settings: Settings | None = None) -> list[dict]:
             """
             SELECT scenario, any_value(model) AS model, any_value(model_name) AS model_name,
                    domain, variable,
-                   count(DISTINCT group_id) AS n_groups, count(DISTINCT fleet_id) AS n_fleets,
+                   count(DISTINCT coalesce(CAST(group_id AS VARCHAR), group_name)) AS n_groups,
+                   count(DISTINCT coalesce(CAST(fleet_id AS VARCHAR), fleet_name)) AS n_fleets,
                    min(year) AS year_min, max(year) AS year_max, count(*) AS n_rasters
             FROM catalog_rasters
             GROUP BY scenario, domain, variable

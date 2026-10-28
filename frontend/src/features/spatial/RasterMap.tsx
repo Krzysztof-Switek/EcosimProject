@@ -5,7 +5,9 @@ import "leaflet-draw";
 import "leaflet-draw/dist/leaflet.draw.css";
 import parseGeoraster from "georaster";
 import type { GeoRaster } from "georaster-layer-for-leaflet";
+import type { MapCrsMismatch } from "../../api/types";
 import { makeValueToColor, type PaletteId } from "./colorScale";
+import { MapCrsFix } from "./MapCrsFix";
 
 const BALTIC_CENTER: [number, number] = [58.5, 19.5];
 const BALTIC_ZOOM = 5;
@@ -198,7 +200,7 @@ export function RasterMap({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const overlayRef = useRef<L.ImageOverlay | null>(null);
-  const fittedRef = useRef(false);
+  const fittedRef = useRef<string | null>(null); // extent the view was last fitted to
   const drawnItemsRef = useRef<L.FeatureGroup | null>(null);
   const displayLayerRef = useRef<L.LayerGroup | null>(null);
   // Parsed rasters are immutable once fetched (raw .asc is immutable, and the
@@ -208,6 +210,10 @@ export function RasterMap({
   const [georaster, setGeoraster] = useState<GeoRaster | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The map's declared CRS can't be right -- offer to pick the real one (MapCrsFix).
+  const [crsMismatch, setCrsMismatch] = useState<MapCrsMismatch | null>(null);
+  // Bumped after the CRS is fixed: same URL, but the server now converts differently.
+  const [refetchToken, setRefetchToken] = useState(0);
 
   // Create the base map, its draw toolbar, and the editable AOI layer group once.
   useEffect(() => {
@@ -302,13 +308,21 @@ export function RasterMap({
 
     let cancelled = false;
     setError(null);
+    setCrsMismatch(null);
     const showLoadingTimer = setTimeout(() => {
       if (!cancelled) setLoading(true);
     }, LOADING_INDICATOR_DELAY_MS);
 
     fetch(rasterUrl)
-      .then((res) => {
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          if (body?.detail?.code === "map_crs_mismatch") {
+            if (!cancelled) setCrsMismatch(body.detail as MapCrsMismatch);
+            throw new Error(body.detail.message);
+          }
+          throw new Error(typeof body?.detail === "string" ? body.detail : `${res.status} ${res.statusText}`);
+        }
         return res.arrayBuffer();
       })
       .then(parseGeoraster)
@@ -331,7 +345,7 @@ export function RasterMap({
       cancelled = true;
       clearTimeout(showLoadingTimer);
     };
-  }, [rasterUrl]);
+  }, [rasterUrl, refetchToken]);
 
   // Warm the cache for the predicted next raster (autoplay/scrubbing forward)
   // while the current one is on screen, so that transition is a cache hit
@@ -377,12 +391,18 @@ export function RasterMap({
     ];
     if (overlayRef.current) {
       overlayRef.current.setUrl(url);
+      // Normally the same fixed grid every frame, but not after a source's
+      // CRS is corrected (the reprojected grid has different bounds).
+      overlayRef.current.setBounds(L.latLngBounds(bounds));
     } else {
       overlayRef.current = L.imageOverlay(url, bounds).addTo(map);
     }
-    if (!fittedRef.current) {
+    // Fit once per grid extent, so stepping through years never moves the
+    // user's view, but a different grid (another model, a CRS fix) is framed.
+    const boundsKey = [georaster.xmin, georaster.ymin, georaster.xmax, georaster.ymax].join(",");
+    if (fittedRef.current !== boundsKey) {
       map.fitBounds(bounds);
-      fittedRef.current = true;
+      fittedRef.current = boundsKey;
     }
     onStats({ min, max, dataMin, dataMax });
     // Depend on the override's primitive values, not its object identity --
@@ -396,7 +416,19 @@ export function RasterMap({
     <div className="rastermap">
       <div ref={containerRef} className="rastermap__canvas" />
       {loading && <div className="rastermap__overlay muted">Loading map…</div>}
-      {error && <div className="rastermap__overlay error">Failed to load raster: {error}</div>}
+      {crsMismatch ? (
+        <MapCrsFix
+          info={crsMismatch}
+          onApplied={() => {
+            // Everything parsed so far was converted under the old CRS.
+            cacheRef.current.clear();
+            setCrsMismatch(null);
+            setRefetchToken((t) => t + 1);
+          }}
+        />
+      ) : (
+        error && <div className="rastermap__overlay error">Failed to load raster: {error}</div>
+      )}
     </div>
   );
 }

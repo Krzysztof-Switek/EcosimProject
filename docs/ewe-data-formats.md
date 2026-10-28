@@ -404,6 +404,33 @@ niezależnie od tego, na jakim poziomie/pod jaką nazwą użytkownik akurat klik
   bez błędu (bo to naprawdę WGS84). Rastry input-driverów (`input/`, brak `RunInfo.txt`) nadal
   nie są tym sprawdzane — nie ma z czym porównać, zachowanie bez zmian.
 
+### ⚠️ Deklarowany układ bywa po prostu błędny — zweryfikowane 28.10 na modelu FuMa_SSP1_SCEN
+
+Mapy modelu **FuMa_SSP1_SCEN** (`RU_SSP1/…/asc/`) mają nagłówek `xllcorner 4535378`,
+`yllcorner 3432716`, `cellsize 4000` (siatka 225×219), czyli **metry**. Mimo to EwE
+deklaruje w `Ecospace RunInfo.txt` (`CoordinateSystemWKT`) **WGS 84 / EPSG:4326**, a w plikach
+`.prj` zapisanych obok map ECOIND (`biodiv_ind_*.prj`) ten sam GEOGCS. `RunInfo.txt` ma też
+`MapCellSize,4000` i `MapLatitude,4308716`, kolejne liczby w metrach. Kontrola z 27.08 (WKT
+musi być EPSG:4326) to przepuściła. Raster dostał etykietę EPSG:4326 z długością
+geograficzną 4,5 mln stopni i Leaflet „zawinął” mapę świata wiele razy, czyli **mapa
+wyświetlała się wielokrotnie powielona**.
+
+**Żaden plik eksportu nie mówi, jaki układ jest prawdziwy.** UG (s.246–250) opisuje tylko
+WGS84 i tryb „Assume Square Cells” (lokalny UTM), ale nie to, jak tryb jest zaznaczany w
+eksporcie. 4,5 mln m to nie UTM. Liczby pasują do ETRS89-LAEA (EPSG:3035): rogi wypadają
+na 13,3°E 54,0°N (Rugia) i 30,5°E 60,4°N (Zatoka Fińska). Po przeliczeniu zgodność z
+linią brzegową OSM jest bardzo dobra (Bornholm, Gotland, Olandia, Zatoka Gdańska, Zatoka
+Ryska). To jednak **wniosek z liczb, nie fakt z danych**.
+
+**✅ Rozwiązanie (28.10):** `DataSource.map_crs` to układ ustawiany przez użytkownika dla
+źródła danych. `write_cog()` bierze go przed WKT z RunInfo. Siatkę w układzie rzutowanym
+przelicza do WGS84 metodą nearest-neighbour, więc wartości komórek są kopiowane, a nie
+interpolowane. Współrzędne niemożliwe w układzie stopniowym (|x|>180, |y|>90) dają
+`MapCrsError` zamiast błędnego rastra. Mapa pokazuje wtedy panel z listą kandydatów
+(`asc_grid.CANDIDATE_CRS`) i zasięgiem w stopniach, jaki dałby każdy z nich. Użytkownik
+wybiera układ (`PUT /admin/sources/{id}/map-crs`), a cache przekonwertowanych COG tej domeny
+jest czyszczony. Testy: `backend/tests/test_map_crs.py`.
+
 ### Cykl zapisu map przestrzennych: nie zawsze rocznie — kolejny prawdziwy rozjazd
 
 Nasz kod (`asc_grid.py`: `year = start_year + (timestep - 1) // 12`, oraz cały indeks

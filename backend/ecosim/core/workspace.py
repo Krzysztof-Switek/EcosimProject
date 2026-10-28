@@ -90,6 +90,12 @@ class DataSource:
     # source downloads whatever is missing first instead of refusing. Never
     # set implicitly: a multi-GB download is the user's call, not the app's.
     keep_local: bool = False
+    # The coordinate system this source's Ecospace maps are really in (e.g.
+    # "EPSG:3035"), set by the user when the CRS EwE declares can't be right
+    # for the numbers in the files (see ingestion/parsers/asc_grid.py). None =
+    # trust what EwE declares. Never set implicitly: the data doesn't say which
+    # CRS is right, so it's the user's call.
+    map_crs: str | None = None
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -113,6 +119,7 @@ class DataSource:
             run_count=d.get("run_count", 1),
             scan_duration_seconds=d.get("scan_duration_seconds"),
             keep_local=d.get("keep_local", False),
+            map_crs=d.get("map_crs"),
         )
 
 
@@ -202,6 +209,14 @@ class WorkspaceRegistry:
         for key in ("active_output_id", "active_input_id"):
             if data.get(key) == source_id:
                 data[key] = None
+        self._write(data)
+
+    def set_map_crs(self, source_id: str, map_crs: str | None) -> None:
+        data = self._load()
+        match = next((s for s in data["sources"] if s["id"] == source_id), None)
+        if match is None:
+            raise ValueError(f"Unknown data source: {source_id}")
+        match["map_crs"] = map_crs
         self._write(data)
 
     def set_active(self, source_id: str) -> None:

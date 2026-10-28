@@ -92,26 +92,6 @@ def test_write_cog_accepts_matching_wgs84_wkt(tmp_path):
     assert out.exists()
 
 
-def test_write_cog_rejects_non_wgs84_wkt(tmp_path):
-    from ecosim.ingestion.parsers.asc_grid import write_cog
-
-    src = RAW / "output/Baseline_cumulative/baseline cumulative/asc/EcospaceMapBiomass-Benthopelagic-00001.asc"
-    # A real local-UTM WKT (zone 33N, metres) -- stands in for what Ecospace's
-    # "Assume Square Cells" mode would report instead of WGS84.
-    utm_wkt = (
-        "PROJCS['WGS 84 / UTM zone 33N', GEOGCS['WGS 84', DATUM['WGS_1984', "
-        "SPHEROID['WGS 84',6378137,298.257223563]], PRIMEM['Greenwich',0], "
-        "UNIT['degree',0.0174532925199433]], PROJECTION['Transverse_Mercator'], "
-        "PARAMETER['latitude_of_origin',0], PARAMETER['central_meridian',15], "
-        "PARAMETER['scale_factor',0.9996], PARAMETER['false_easting',500000], "
-        "PARAMETER['false_northing',0], UNIT['metre',1], AUTHORITY['EPSG','32633']]"
-    )
-    out = tmp_path / "biomass.tif"
-    with pytest.raises(ValueError, match="not WGS84/EPSG:4326"):
-        write_cog(src, out, source_crs_wkt=utm_wkt)
-    assert not out.exists()  # rejected before any conversion work happened
-
-
 def test_materialize_raster_converts_once_then_caches(tmp_path):
     from ecosim.core.config import Settings
     from ecosim.ingestion.spatial_pipeline import materialize_raster

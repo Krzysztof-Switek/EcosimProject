@@ -368,6 +368,31 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 }
 .rastermap__overlay.error { color: var(--danger); }
 
+/* map CRS fix panel (MapCrsFix) -- over the map when a source's declared CRS can't be right */
+.crsfix {
+  position: absolute; top: 8px; left: 8px; right: 8px; z-index: 1000; max-width: 560px;
+  max-height: calc(100% - 16px); overflow: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 14px; font-size: 13px; box-shadow: 0 4px 16px rgba(0, 0, 0, .18);
+}
+.crsfix__title { font-weight: 600; margin-bottom: 6px; color: var(--warn); }
+.crsfix__text { margin: 0 0 10px; line-height: 1.45; }
+.crsfix__list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.crsfix__item {
+  display: grid; grid-template-columns: auto 92px 1fr; align-items: center; gap: 4px 8px;
+  padding: 4px 6px; border-radius: 6px; cursor: pointer;
+}
+.crsfix__item:hover { background: var(--bg); }
+.crsfix__item.is-disabled { opacity: .5; cursor: default; }
+.crsfix__code { font-weight: 600; font-variant-numeric: tabular-nums; }
+.crsfix__extent { grid-column: 3; font-size: 12px; }
+.crsfix__custom { grid-column: 3; width: 100%; max-width: 220px; padding: 3px 6px; font-size: 12px; }
+.crsfix__actions { display: flex; justify-content: flex-end; }
+@media (max-width: 520px) {
+  .crsfix__item { grid-template-columns: auto 1fr; }
+  .crsfix__name, .crsfix__extent, .crsfix__custom { grid-column: 2; }
+}
+
 .legend {
   display: flex; align-items: center; gap: 10px; flex-shrink: 0;
   padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel);
