@@ -18,8 +18,8 @@ interface Props {
   label: string;
   scenarios: string[];
   scenarioLabel: (scenario: string) => string;
-  groups: string[];
-  fleets: string[];
+  groupIds: number[]; // EwE group numbers chosen in step 5
+  fleetIds: number[]; // EwE fleet numbers chosen in step 6
   range: Range;
   onRemove: () => void;
 }
@@ -36,14 +36,16 @@ export function VariableChart({
   label,
   scenarios,
   scenarioLabel,
-  groups,
-  fleets,
+  groupIds,
+  fleetIds,
   range,
   onRemove,
 }: Props) {
   const hasGroups = entry.n_groups > 0;
   const hasFleets = entry.n_fleets > 0;
-  const ready = scenarios.length > 0 && (!hasGroups || groups.length > 0);
+  const ready =
+    scenarios.length > 0 && (!hasGroups || groupIds.length > 0) && (!hasFleets || fleetIds.length > 0);
+  const missing = [hasGroups && "groups (step 5)", hasFleets && "fleets (step 6)"].filter(Boolean).join(" and ");
 
   const { data, loading, error } = useAsync(
     () =>
@@ -52,12 +54,12 @@ export function VariableChart({
             variable,
             freq,
             scenario: scenarios,
-            group: hasGroups ? groups : undefined,
-            fleet: hasFleets ? fleets : undefined,
+            group_id: hasGroups ? groupIds : undefined,
+            fleet_id: hasFleets ? fleetIds : undefined,
             ...range,
           })
         : Promise.resolve({ count: 0, variable, freq, rows: [] }),
-    [variable, freq, scenarios, groups, fleets,
+    [variable, freq, scenarios.join("|"), groupIds.join("|"), fleetIds.join("|"),
      range.year_from, range.year_to, range.month_from, range.month_to, ready],
   );
 
@@ -78,7 +80,7 @@ export function VariableChart({
       {!error && loading && <div className="muted pad">Loading…</div>}
       {!error && !loading && !ready && (
         <div className="muted pad">
-          Pick models/scenarios{hasGroups ? " and groups" : ""} to plot this variable.
+          Pick models/scenarios{missing ? ` and ${missing}` : ""} to plot this variable.
         </div>
       )}
       {!error && !loading && ready && rows.length === 0 && (

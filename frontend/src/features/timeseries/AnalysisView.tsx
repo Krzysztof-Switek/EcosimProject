@@ -1,7 +1,5 @@
 import { useMemo, useState } from "react";
-import type { DimItem } from "../../api/types";
 import type { VariableKey } from "../catalog/catalogIndex";
-import { MultiSelect, type Option } from "../../components/MultiSelect";
 import { VariableSeriesPicker } from "../catalog/VariableSeriesPicker";
 import { VariableChart } from "./VariableChart";
 import { AnalysisPanel } from "../analyses/AnalysisPanel";
@@ -12,8 +10,8 @@ interface Props {
   scenarioLabel: (scenario: string) => string;
   scenariosForVar: (v: VariableKey) => string[]; // effective per-variable series
   availableScenarios: (v: VariableKey) => string[]; // candidates allowed by steps 1–2
-  groups: DimItem[];
-  fleets: DimItem[];
+  groupIds: number[]; // EwE group numbers chosen in step 5 (sidebar)
+  fleetIds: number[]; // EwE fleet numbers chosen in step 6 (sidebar)
   onRemove: (varId: string) => void;
   onClear: () => void;
 
@@ -35,8 +33,8 @@ const MONTHS = [
 
 /**
  * Shared analysis workspace. The focused variable's model/scenario picker sits
- * (always visible) at the top of the controls column; group / fleet / range
- * controls below drive the whole grid. The range control follows the time step
+ * (always visible) at the top of the controls column; the range control below
+ * drives the whole grid, as do the groups and fleets picked in steps 5–6 (sidebar). The range control follows the time step
  * (step 3): years for annual, year-months for monthly. The selection is also the
  * "basket" (manifest) that feeds R analyses. Charts only visualise the chosen
  * data — no computation happens here.
@@ -47,8 +45,8 @@ export function AnalysisView({
   scenarioLabel,
   scenariosForVar,
   availableScenarios,
-  groups,
-  fleets,
+  groupIds,
+  fleetIds,
   onRemove,
   onClear,
   focusedVariable,
@@ -62,9 +60,6 @@ export function AnalysisView({
   const yearMin = Math.min(...variables.map((v) => v.entry.year_min));
   const yearMax = Math.max(...variables.map((v) => v.entry.year_max));
 
-  // Nothing preselected: groups/fleets start empty — the user chooses.
-  const [selGroups, setSelGroups] = useState<string[]>([]);
-  const [selFleets, setSelFleets] = useState<string[]>([]);
   // Range bounds default to the full available span (a filter window, not a
   // data selection); unit follows the time step — years for annual, months
   // (1–12, month-of-year) for monthly.
@@ -72,9 +67,6 @@ export function AnalysisView({
   const [yearTo, setYearTo] = useState(yearMax);
   const [monthFrom, setMonthFrom] = useState(1);
   const [monthTo, setMonthTo] = useState(12);
-
-  const groupOpts: Option[] = groups.map((g) => ({ value: g.name, label: g.name }));
-  const fleetOpts: Option[] = fleets.map((f) => ({ value: f.name, label: f.name }));
 
   // Range params forwarded to the API, depending on the time step.
   const range = monthly
@@ -84,8 +76,8 @@ export function AnalysisView({
   const manifest = useMemo(
     () => ({
       freq,
-      groups: anyGroups ? selGroups : [],
-      fleets: anyFleets ? selFleets : [],
+      group_ids: anyGroups ? groupIds : [],
+      fleet_ids: anyFleets ? fleetIds : [],
       ...range,
       variables: variables.map((v) => ({
         variable: v.variable,
@@ -94,7 +86,7 @@ export function AnalysisView({
       })),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [freq, anyGroups, selGroups, anyFleets, selFleets, yearFrom, yearTo, monthFrom, monthTo, variables, scenariosForVar],
+    [freq, anyGroups, groupIds, anyFleets, fleetIds, yearFrom, yearTo, monthFrom, monthTo, variables, scenariosForVar],
   );
 
   const copyManifest = () => {
@@ -116,26 +108,6 @@ export function AnalysisView({
             hasOverride={hasOverride(varId(focusedVariable))}
             onChange={(list) => onSetVarScenarios(varId(focusedVariable), list)}
             onClear={() => onSetVarScenarios(varId(focusedVariable), null)}
-          />
-        )}
-        {anyGroups && (
-          <MultiSelect
-            title="Groups"
-            options={groupOpts}
-            selected={selGroups}
-            onChange={setSelGroups}
-            searchable
-            collapsible
-          />
-        )}
-        {anyFleets && (
-          <MultiSelect
-            title="Fleets"
-            options={fleetOpts}
-            selected={selFleets}
-            onChange={setSelFleets}
-            searchable
-            collapsible
           />
         )}
         <div className="field">
@@ -235,8 +207,8 @@ export function AnalysisView({
               label={v.label}
               scenarios={scenariosForVar(v)}
               scenarioLabel={scenarioLabel}
-              groups={selGroups}
-              fleets={selFleets}
+              groupIds={groupIds}
+              fleetIds={fleetIds}
               range={range}
               onRemove={() => onRemove(varId(v))}
             />

@@ -1,4 +1,4 @@
-import type { TimeseriesRow } from "../../api/types";
+import type { DimensionKind, TimeseriesRow } from "../../api/types";
 
 export interface Series {
   key: string;
@@ -19,6 +19,14 @@ const PALETTE = [
   "#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#8c564b",
 ];
 
+/** A group's or fleet's display label: EwE's own name where the file carried one,
+ * else its number -- most EwE outputs (e.g. catch_annual.csv) have numbers only. */
+export function dimensionLabel(kind: DimensionKind, id: number | null, name: string | null): string | null {
+  if (name) return name;
+  if (id == null) return null;
+  return `${kind === "group" ? "Group" : "Fleet"} ${id}`;
+}
+
 /**
  * Pivot tidy rows into Recharts-ready data. A series is the combination of the
  * dimensions that actually vary (scenario and/or group), so labels stay terse.
@@ -30,16 +38,23 @@ export function buildChartModel(
   const xField: "year" | "date" =
     rows.length > 0 && rows[0].freq === "monthly" ? "date" : "year";
 
+  const group = (r: TimeseriesRow) => dimensionLabel("group", r.group_id, r.group_name);
+  const fleet = (r: TimeseriesRow) => dimensionLabel("fleet", r.fleet_id, r.fleet_name);
   const scenarios = new Set(rows.map((r) => r.scenario));
-  const groups = new Set(rows.filter((r) => r.group_name).map((r) => r.group_name!));
+  const groups = new Set(rows.map(group).filter((g) => g));
+  const fleets = new Set(rows.map(fleet).filter((f) => f));
   const multiScenario = scenarios.size > 1;
   const multiGroup = groups.size > 1;
+  const multiFleet = fleets.size > 1;
 
   const seriesKey = (r: TimeseriesRow): string => {
+    const g = group(r);
+    const f = fleet(r);
     const parts: string[] = [];
     if (multiScenario) parts.push(scenarioLabel(r.scenario));
-    if (multiGroup && r.group_name) parts.push(r.group_name);
-    if (parts.length === 0) parts.push(r.group_name ?? scenarioLabel(r.scenario));
+    if (multiFleet && f) parts.push(f);
+    if (multiGroup && g) parts.push(g);
+    if (parts.length === 0) parts.push(g ?? f ?? scenarioLabel(r.scenario));
     return parts.join(" · ");
   };
 

@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import type { ModelSummary } from "../../api/types";
 import { Step } from "../../components/Step";
 import type { VariableKey } from "./catalogIndex";
+import { DimensionStep } from "./DimensionStep";
+import type { DimensionPicker } from "./useDimensionPicker";
 import { CATEGORY_ORDER, CATEGORY_LABELS } from "./categories";
 
 type Freq = "annual" | "monthly";
@@ -27,6 +29,11 @@ interface Props {
   focusedVarId: string | null;
   onFocusVar: (id: string) => void;
   effectiveScenarios: (v: VariableKey) => string[];
+
+  // Steps 5–6 — functional groups and fleets (each shown only when a selected
+  // variable has that dimension)
+  groups: DimensionPicker;
+  fleets: DimensionPicker;
 }
 
 const varId = (v: VariableKey) => `${v.domain}|${v.variable}`;
@@ -67,10 +74,12 @@ function buildSections(variables: VariableKey[]): Section[] {
 
 /**
  * Left-hand guided navigator:
- *   1. Models → 2. Scenarios → 3. Frequency → 4. Variables
+ *   1. Models → 2. Scenarios → 3. Frequency → 4. Variables → 5. Groups → 6. Fleets
  * Steps 1–2 define the global pool of (model, scenario) series; clicking a
  * variable focuses it, and its per-variable model/scenario picker is shown
- * (always visible) at the top of the analysis controls column.
+ * (always visible) at the top of the analysis controls column. Steps 5–6 list
+ * the functional groups / fleets present in the chosen variables' data, by EwE
+ * number (most EwE outputs carry no names).
  */
 export function Sidebar(props: Props) {
   const {
@@ -88,6 +97,8 @@ export function Sidebar(props: Props) {
     focusedVarId,
     onFocusVar,
     effectiveScenarios,
+    groups,
+    fleets,
   } = props;
 
   const [filter, setFilter] = useState("");
@@ -270,6 +281,21 @@ export function Sidebar(props: Props) {
           {sections.length === 0 && <div className="muted pad">no variables</div>}
         </div>
       </div>
+
+      <DimensionStep
+        n={5}
+        title="Groups"
+        picker={groups}
+        open={isStepOpen("groups")}
+        onToggle={() => toggleStep("groups")}
+      />
+      <DimensionStep
+        n={6}
+        title="Fleets"
+        picker={fleets}
+        open={isStepOpen("fleets")}
+        onToggle={() => toggleStep("fleets")}
+      />
     </nav>
   );
 }

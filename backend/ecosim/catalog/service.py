@@ -142,13 +142,18 @@ def query_timeseries(
     variable: str,
     freq: str = "annual",
     group: list[str] | None = None,
+    group_id: list[int] | None = None,
     fleet: list[str] | None = None,
+    fleet_id: list[int] | None = None,
     year_from: int | None = None,
     year_to: int | None = None,
     month_from: int | None = None,
     month_to: int | None = None,
 ) -> list[dict]:
-    """Return tidy rows for charting. ``group``/``fleet`` match names case-insensitively.
+    """Return tidy rows for charting. ``group``/``fleet`` match names case-insensitively;
+    ``group_id``/``fleet_id`` match EwE's own numbers -- the usual way to pick them, since
+    most EwE outputs (e.g. ``catch_annual.csv``, ``year\\group,1,2,...``) carry only the
+    number and no name (see ``list_dimension``).
 
     Range filtering: ``year_from``/``year_to`` bound by calendar year; for monthly
     data ``month_from``/``month_to`` additionally bound by month-of-year (1–12),
@@ -166,9 +171,15 @@ def query_timeseries(
     if group:
         clauses.append(f"lower(group_name) IN ({_placeholders(group)})")
         params += [g.lower() for g in group]
+    if group_id:
+        clauses.append(f"group_id IN ({_placeholders(group_id)})")
+        params += group_id
     if fleet:
         clauses.append(f"lower(fleet_name) IN ({_placeholders(fleet)})")
         params += [f.lower() for f in fleet]
+    if fleet_id:
+        clauses.append(f"fleet_id IN ({_placeholders(fleet_id)})")
+        params += fleet_id
     if year_from is not None:
         clauses.append("year >= ?")
         params.append(year_from)
@@ -185,7 +196,43 @@ def query_timeseries(
         "SELECT model, model_name, scenario, variable, freq, date, year, month, "
         "group_id, group_name, fleet_id, fleet_name, partner_id, partner_name, value "
         "FROM timeseries WHERE " + " AND ".join(clauses) +
-        " ORDER BY model, scenario, group_name, fleet_name, partner_name, year, month"
+        " ORDER BY model, scenario, group_id, group_name, fleet_id, fleet_name, partner_name, year, month"
+    )
+    with _ro(settings) as con:
+        return _rows(con, sql, params)
+
+
+# Dimensions list_dimension can enumerate -> their (id, name) columns. A fixed map,
+# so nothing caller-supplied is ever interpolated into SQL.
+_DIMENSION_COLUMNS = {"group": ("group_id", "group_name"), "fleet": ("fleet_id", "fleet_name")}
+
+
+def list_dimension(
+    settings: Settings | None = None,
+    *,
+    dimension: str,
+    variable: list[str],
+    freq: str = "annual",
+    scenario: list[str] | None = None,
+) -> list[dict]:
+    """Functional groups or fleets (``dimension``) present in the data of ``variable``
+    (one or more) for the given scenarios -- the options for picking them. One row
+    per EwE number (``id``) with the variables it occurs in, and its ``name`` only
+    where EwE wrote one into the file itself (no id->name dictionary exists; EwE
+    numbers groups and fleets per model, in the order the modeller entered them --
+    docs/ewe-data-formats.md, section 5)."""
+    id_col, name_col = _DIMENSION_COLUMNS[dimension]
+    settings = settings or get_settings()
+    clauses = [f"variable IN ({_placeholders(variable)})", "freq = ?", f"{id_col} IS NOT NULL"]
+    params: list = [*variable, freq]
+    if scenario:
+        clauses.append(f"scenario IN ({_placeholders(scenario)})")
+        params += scenario
+    sql = (
+        f"SELECT {id_col} AS id, any_value({name_col}) AS name, "
+        "list(DISTINCT variable ORDER BY variable) AS variables "
+        "FROM timeseries WHERE " + " AND ".join(clauses) +
+        f" GROUP BY {id_col} ORDER BY {id_col}"
     )
     with _ro(settings) as con:
         return _rows(con, sql, params)

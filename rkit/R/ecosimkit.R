@@ -24,8 +24,10 @@ ecosim_load_timeseries <- function() {
   stop("Package 'arrow' is not installed and no CSV fallback exists at: ", path)
 }
 
-#' Wczytaj słownik: "groups" | "fleets" | "scenarios".
-ecosim_dict <- function(name = c("groups", "fleets", "scenarios")) {
+#' Wczytaj słownik: "scenarios". Słowników grup/flot nie ma (usunięte 2026-08-28) --
+#' grupy i floty identyfikują kolumny group_id/fleet_id w danych, nazwy (group_name/
+#' fleet_name) są tylko tam, gdzie EwE zapisało je w pliku.
+ecosim_dict <- function(name = "scenarios") {
   name <- match.arg(name)
   utils::read.csv(file.path(.job_dir(), "data", "dictionaries", paste0(name, ".csv")),
                   check.names = FALSE)

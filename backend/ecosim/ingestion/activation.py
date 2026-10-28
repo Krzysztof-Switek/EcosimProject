@@ -36,12 +36,13 @@ from ecosim.core.config import Settings, settings_for_single_source, source_cach
 from ecosim.core.schema import RASTER_INDEX_COLUMNS
 from ecosim.core.workspace import DataSource, WorkspaceRegistry
 from ecosim.ingestion.file_access import (
+    SourceNotLocalError,
     can_make_local,
     check_files_are_local,
-    release_keep_local,
-    request_keep_local,
+    download_files,
     scan_local_availability,
-    wait_until_local,
+    sync_client_not_running,
+    sync_client_not_running_message,
 )
 from ecosim.ingestion.pipeline import IngestCancelled, IngestReport, ProgressFn, run_ingest
 from ecosim.ingestion.spatial_pipeline import SpatialIndexReport, build_raster_index
@@ -260,27 +261,42 @@ def _scan_warnings(report: IngestReport, spatial_report: SpatialIndexReport) -> 
 def _download_to_this_computer(
     source: DataSource, on_progress: ProgressFn | None, cancel_event: threading.Event | None,
 ) -> None:
-    """First phase of scanning a ``keep_local`` source: make sure every file
-    is actually on this computer. Pins the folder (the sync app downloads in
-    its own time -- see file_access.request_keep_local) and waits, reporting
-    phase "downloading" as (bytes downloaded, bytes total). A no-op when
-    nothing is missing. On cancel, un-pins so the sync app stops fetching
-    the rest, then raises IngestCancelled like any other cancelled scan."""
-    missing = scan_local_availability(source.path, cancel_event=cancel_event)
+    """First phase of scanning a ``keep_local`` source: download whichever
+    files the scan needs that aren't on this computer yet (see
+    file_access.download_files), reporting phase "downloading" as (bytes
+    downloaded, bytes total) -- "download_paused" instead while the sync app
+    has stopped serving files and the download waits for it. A no-op when
+    nothing is missing. Refuses up front if the folder's sync app isn't
+    running at all. Cancelling keeps what was already downloaded, so the
+    next attempt only fetches the rest."""
+    report = scan_local_availability(source.path, source.kind, cancel_event=cancel_event)
     if cancel_event is not None and cancel_event.is_set():
         raise IngestCancelled()
-    if not missing.cloud_only:
+    if not report.missing:
         return
-    if on_progress is not None:
-        on_progress("downloading", 0, missing.cloud_only_bytes)
-    request_keep_local(source.path)
-    finished = wait_until_local(
-        source.path,
-        on_progress=(lambda done, total: on_progress("downloading", done, total)) if on_progress else None,
-        cancel_event=cancel_event,
+    client = sync_client_not_running(source.path)
+    if client:
+        raise SourceNotLocalError(sync_client_not_running_message(client))
+    # Remembered so a pause/resume can be reported with the current numbers.
+    state = {"paused": False, "done": 0, "total": 0}
+
+    def report_progress() -> None:
+        if on_progress is not None:
+            phase = "download_paused" if state["paused"] else "downloading"
+            on_progress(phase, state["done"], state["total"])
+
+    def progress(done: int, total: int) -> None:
+        state["done"], state["total"] = done, total
+        report_progress()
+
+    def pause(paused: bool) -> None:
+        state["paused"] = paused
+        report_progress()
+
+    finished = download_files(
+        report.missing, source.path, on_progress=progress, cancel_event=cancel_event, on_pause=pause,
     )
     if not finished:
-        release_keep_local(source.path)
         raise IngestCancelled()
 
 
@@ -309,6 +325,7 @@ def _ingest_one_source(
         # keep_local source this just confirms the download above finished.
         check_files_are_local(
             source.path,
+            source.kind,
             on_progress=(lambda n: on_progress("checking_files", n, None)) if on_progress else None,
             cancel_event=cancel_event,
         )

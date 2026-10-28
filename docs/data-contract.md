@@ -128,13 +128,20 @@ job_<id>/
   "scenarios": ["baseline_cumulative", "has_cumulative"],
   "variables": ["biomass"],
   "freq": "annual",
-  "groups": ["Cod adult", "Herring adult"],
+  "group_ids": [3, 4],
+  "fleet_ids": [],
   "year_from": 1998,
   "year_to": 2050,
   "analysis_id": "biomass_trend_compare",
   "created_at": "2026-08-28T09:15:00.123456+00:00"
 }
 ```
+`group_ids` / `fleet_ids` to numery grup funkcjonalnych / flot EwE (kroki 5 i 6 w UI) —
+większość plików wynikowych EwE (np. `catch_annual.csv`, nagłówek `year\group,1,2,…`;
+`catch-fleet-group_annual.csv`, `year,fleet,group,value`) zapisuje tylko numery, bez nazw,
+a numeracja jest osobna dla każdego modelu (`docs/ewe-data-formats.md` §5). Puste pole =
+bez filtra. Starsze pola `groups` / `fleets` (nazwy) nadal działają, ale dla takich danych
+niczego nie dopasują.
 `analysis_id`/`created_at` są dopisywane automatycznie przez `prepare_job()` (nie są częścią
 selekcji z UI) — nigdy nie trzeba ich podawać przy tworzeniu manifestu.
 
@@ -177,7 +184,7 @@ library(ecosimkit)
 
 ts     <- ecosim_load_timeseries()   # data.frame ze schematu tidy
 params <- ecosim_params()            # lista parametrów z params.json
-groups <- ecosim_dict("groups")
+scens  <- ecosim_dict("scenarios")   # grupy/floty: kolumny group_id/fleet_id w `ts`
 
 fig <- plot_trends(ts)               # własna logika naukowca
 ecosim_emit_figure(fig, "trend.png", title = "Trend biomasy")

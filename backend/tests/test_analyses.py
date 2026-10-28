@@ -2,32 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import shutil
-from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from ecosim.analyses import registry, runner
-from ecosim.core.config import get_settings
-from ecosim.core.workspace import NoActiveDataSourceError
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-@pytest.fixture(autouse=True)
-def _isolated_ecosim_home():
-    """Overrides conftest.py's per-test ECOSIM_CONFIG_DIR isolation for this
-    file specifically (a same-named fixture in a test module takes
-    precedence over conftest.py's): these tests are intentionally gated on
-    -- and query -- whatever REAL data source is currently active in this
-    machine's actual ~/.ecosim profile (see pytestmark_catalog below, which
-    checks that at module-import time). They only ever READ from the
-    catalog (prepare_job/run_analysis's query_timeseries calls), never write
-    to the shared store, so there's no corruption risk in leaving them
-    pointed at the real environment -- unlike ingestion.activation-calling
-    tests elsewhere in this suite, which is exactly what conftest.py's
-    fixture exists to protect (see its docstring for the real incident)."""
-    yield
+from ecosim.catalog.build import build_catalog
+from ecosim.core.config import Settings
+from ecosim.ingestion.pipeline import run_ingest
 
 
 def test_list_analyses_finds_biomass_trend_compare():
@@ -50,83 +34,79 @@ def test_get_analysis_unknown_returns_none():
     assert registry.get_analysis("does_not_exist") is None
 
 
-# prepare_job needs the real, already-ingested canonical store (DuckDB catalog +
-# Parquet timeseries) -- skip if there's no active data source, or the dev
-# store hasn't been built yet, same spirit as the raw-data-dependent tests
-# elsewhere in this suite.
-try:
-    _settings = get_settings()
-    _catalog_built = _settings.catalog_db.exists()
-except NoActiveDataSourceError:
-    _catalog_built = False
-pytestmark_catalog = pytest.mark.skipif(
-    not _catalog_built,
-    reason="no active data source / canonical catalog not built (activate a source, run `ecosim ingest` first)",
+# Each job test builds its own small canonical store under tmp_path (synthetic
+# EwE biomass output, numbers-only header like the real biomass_annual.csv)
+# rather than querying whatever real data source happens to be active on this
+# machine -- they used to, with group *names* and a scenario from a dataset
+# that no longer exists, and failed for months as a result.
+_HEADER_BLOCK = (
+    '"<HEADER ecopath/>"\nModelName,"Test Model"\n'
+    '"<HEADER ecosim/>"\nEcosimScenario,test_scenario\nStartYear,1998\n'
+    '"<HEADER end/>"\n\n'
 )
 
 
-@pytestmark_catalog
-def test_prepare_job_writes_sandbox_contract():
-    spec = registry.get_analysis("biomass_trend_compare")
+@pytest.fixture
+def store(tmp_path) -> Settings:
+    run = tmp_path / "raw" / "ecosim_test_scenario"
+    run.mkdir(parents=True)
+    years = "".join(f"{y},{1 + y % 7},{2 + y % 5},{3 + y % 3}\n" for y in range(1998, 2006))
+    (run / "biomass_annual.csv").write_text(
+        _HEADER_BLOCK + "Data,Biomass\n\nyear\\group,1,2,3\n" + years, encoding="utf-8",
+    )
+    settings = Settings(output_raw_dir=tmp_path / "raw", store_dir=tmp_path / "store")
+    assert not run_ingest(settings).errors
+    build_catalog(settings)
+    return settings
+
+
+def _manifest(**overrides) -> dict:
     manifest = {
-        "scenarios": ["baseline_cumulative"],
-        "variables": ["biomass"],
+        "variables": [{"variable": "biomass", "domain": "output", "scenarios": ["test_scenario"]}],
         "freq": "annual",
-        "groups": ["Ringed seal"],
+        "group_ids": [2, 3],
         "year_from": 1998,
         "year_to": 2000,
     }
-    job_dir = runner.prepare_job(spec, manifest, {"smoothing": 3, "relative": False})
-    try:
-        assert (job_dir / "manifest.json").exists()
-        assert (job_dir / "params.json").exists()
-        assert (job_dir / "data" / "timeseries.parquet").exists()
-        # No groups.csv/fleets.csv any more -- that external dictionary was
-        # removed entirely 2026-08-28 (see
-        # docs/Plans and TO_DO lists/28.08_session_summary.md); only real
-        # Ecosim structure (scenarios) is exported into the sandbox.
-        assert not (job_dir / "data" / "dictionaries" / "groups.csv").exists()
-        assert not (job_dir / "data" / "dictionaries" / "fleets.csv").exists()
-        assert (job_dir / "data" / "dictionaries" / "scenarios.csv").exists()
-        assert (job_dir / "out").is_dir()
-
-        import json
-
-        import pandas as pd
-
-        written_manifest = json.loads((job_dir / "manifest.json").read_text(encoding="utf-8"))
-        assert written_manifest["analysis_id"] == "biomass_trend_compare"
-        assert written_manifest["created_at"]  # non-empty ISO timestamp, added by prepare_job()
-
-        df = pd.read_parquet(job_dir / "data" / "timeseries.parquet")
-        assert (df["variable"] == "biomass").all()
-        assert (df["scenario"] == "baseline_cumulative").all()
-        assert set(df["year"]).issubset({1998, 1999, 2000})
-    finally:
-        shutil.rmtree(job_dir, ignore_errors=True)
+    manifest.update(overrides)
+    return manifest
 
 
-@pytestmark_catalog
-def test_prepare_job_empty_selection_raises_clear_error():
+def test_prepare_job_writes_sandbox_contract(store):
+    spec = registry.get_analysis("biomass_trend_compare")
+    job_dir = runner.prepare_job(spec, _manifest(), {"smoothing": 3, "relative": False}, store)
+    assert (job_dir / "manifest.json").exists()
+    assert (job_dir / "params.json").exists()
+    assert (job_dir / "data" / "timeseries.parquet").exists()
+    # No groups.csv/fleets.csv any more -- that external dictionary was
+    # removed entirely 2026-08-28 (see
+    # docs/Plans and TO_DO lists/28.08_session_summary.md); only real
+    # Ecosim structure (scenarios) is exported into the sandbox.
+    assert not (job_dir / "data" / "dictionaries" / "groups.csv").exists()
+    assert not (job_dir / "data" / "dictionaries" / "fleets.csv").exists()
+    assert (job_dir / "data" / "dictionaries" / "scenarios.csv").exists()
+    assert (job_dir / "out").is_dir()
+
+    written_manifest = json.loads((job_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert written_manifest["analysis_id"] == "biomass_trend_compare"
+    assert written_manifest["created_at"]  # non-empty ISO timestamp, added by prepare_job()
+
+    df = pd.read_parquet(job_dir / "data" / "timeseries.parquet")
+    assert (df["variable"] == "biomass").all()
+    assert (df["scenario"] == "test_scenario").all()
+    assert set(df["group_id"]) == {2, 3}  # selected by EwE group number
+    assert set(df["year"]) == {1998, 1999, 2000}
+
+
+def test_prepare_job_empty_selection_raises_clear_error(store):
     # A selection that matches zero rows (e.g. a group with no data for this
     # variable/scenario) used to reach R and blow up deep inside dplyr/stats
     # with a cryptic traceback -- confirm it's now caught before R ever runs.
     spec = registry.get_analysis("biomass_trend_compare")
-    manifest = {
-        "scenarios": ["baseline_cumulative"],
-        "variables": ["biomass"],
-        "freq": "annual",
-        "groups": ["Definitely Not A Real Group"],
-        "year_from": 1998,
-        "year_to": 2000,
-    }
-    jobs_before = set(get_settings().jobs_dir.glob("job_*"))
     with pytest.raises(runner.AnalysisRunError, match="No data matched"):
-        runner.prepare_job(spec, manifest, {"smoothing": 3, "relative": False})
-    # No partially-materialized timeseries.parquet left behind for any new job dir.
-    for d in set(get_settings().jobs_dir.glob("job_*")) - jobs_before:
-        assert not (d / "data" / "timeseries.parquet").exists()
-        shutil.rmtree(d, ignore_errors=True)
+        runner.prepare_job(spec, _manifest(group_ids=[99]), {"smoothing": 3, "relative": False}, store)
+    # No partially-materialized timeseries.parquet left behind for any job dir.
+    assert not list(store.jobs_dir.glob("job_*/data/timeseries.parquet"))
 
 
 def test_run_job_missing_rscript_raises_clear_error(tmp_path, monkeypatch):
@@ -141,26 +121,18 @@ def test_run_job_missing_rscript_raises_clear_error(tmp_path, monkeypatch):
         runner.run_job(tmp_path, tmp_path / "entry.R")
 
 
-@pytestmark_catalog
 @pytest.mark.skipif(not shutil.which("Rscript"), reason="Rscript not installed")
-def test_run_analysis_end_to_end_produces_real_artifacts():
+def test_run_analysis_end_to_end_produces_real_artifacts(store):
     spec = registry.get_analysis("biomass_trend_compare")
-    manifest = {
-        "scenarios": ["baseline_cumulative"],
-        "variables": ["biomass"],
-        "freq": "annual",
-        "groups": ["Ringed seal"],
-        "year_from": 1998,
-        "year_to": 2005,
-    }
-    outcome = runner.run_analysis(spec, manifest, {"smoothing": 3, "relative": False})
-    job_dir = get_settings().jobs_dir / outcome["job_id"]
-    try:
-        result = outcome["result"]
-        assert result["status"] == "ok"
-        kinds = {a["type"] for a in result["artifacts"]}
-        assert kinds == {"figure", "table"}
-        for artifact in result["artifacts"]:
-            assert (job_dir / "out" / artifact["path"]).exists()
-    finally:
-        shutil.rmtree(job_dir, ignore_errors=True)
+    outcome = runner.run_analysis(spec, _manifest(year_to=2005), {"smoothing": 3, "relative": False}, store)
+    job_dir = store.jobs_dir / outcome["job_id"]
+    result = outcome["result"]
+    assert result["status"] == "ok"
+    assert {a["type"] for a in result["artifacts"]} == {"figure", "table"}
+    for artifact in result["artifacts"]:
+        assert (job_dir / "out" / artifact["path"]).exists()
+    # The summary is per EwE group number, labelled "Group N" (the file has no names).
+    table = next(a for a in result["artifacts"] if a["type"] == "table")
+    summary = pd.read_csv(job_dir / "out" / table["path"])
+    assert sorted(summary["group_id"]) == [2, 3]
+    assert sorted(summary["group"]) == ["Group 2", "Group 3"]

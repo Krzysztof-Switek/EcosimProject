@@ -449,17 +449,17 @@ export function DataSourcePanel({
                 <div className="datasource__notice">
                   <strong>This folder isn't on this computer yet</strong>
                   <p>
-                    {notLocal.info.cloud_only_files.toLocaleString()} of its files (
+                    {notLocal.info.cloud_only_files.toLocaleString()} files the scan needs (
                     {formatBytes(notLocal.info.cloud_only_bytes)}) are stored only online (OneDrive
                     “Files On-Demand”). They have to be downloaded to this computer before the data can be
-                    scanned.
+                    scanned — roughly {formatDuration(notLocal.info.estimated_seconds).replace(/^~/, "")}.
                   </p>
                   {notLocal.info.can_download ? (
                     <>
                       <p className="muted">
-                        Download and scan asks OneDrive to keep this folder on this computer from now on (the
-                        same as “Always keep on this device” in File Explorer), waits for the download, then
-                        scans automatically. Progress is shown on the tile — you can leave this screen.
+                        Download and scan downloads just these files, keeps them on this computer, then scans
+                        automatically. Other files in the folder stay online. Progress is shown on the tile —
+                        you can leave this screen.
                       </p>
                       <div className="datasource__notice-actions">
                         <button className="btn" onClick={() => confirmFolder(notLocal.path, true)} disabled={submitting}>

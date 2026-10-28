@@ -17,6 +17,7 @@ export interface ActivatingSource {
 export const PHASE_LABEL: Record<string, string> = {
   starting: "Starting",
   downloading: "Downloading to this computer",
+  download_paused: "OneDrive stopped responding, waiting for it to resume",
   checking_files: "Checking files are on this computer",
   discovering_output: "Scanning output files",
   output: "Loading output data",
@@ -31,9 +32,10 @@ export const PHASE_LABEL: Record<string, string> = {
 export function activationLabel(status: ActivationStatus | null): string {
   if (!status) return "Starting…";
   const phase = PHASE_LABEL[status.phase ?? ""] ?? status.phase ?? "Working";
-  // "downloading" reports bytes, not files (see backend activation.py's
-  // _download_to_this_computer).
-  if (status.phase === "downloading" && status.files_total) {
+  // "downloading"/"download_paused" report bytes, not files (see backend
+  // activation.py's _download_to_this_computer).
+  const isDownload = status.phase === "downloading" || status.phase === "download_paused";
+  if (isDownload && status.files_total) {
     const gb = (n: number) => (n / 1024 ** 3).toFixed(1); // 1024-based, like File Explorer
     return `${phase}… ${gb(status.files_done)} / ${gb(status.files_total)} GB`;
   }

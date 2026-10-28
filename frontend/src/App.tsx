@@ -4,6 +4,7 @@ import { useAsync } from "./api/useAsync";
 import type { DimItem } from "./api/types";
 import { buildVariableIndex, type VariableKey } from "./features/catalog/catalogIndex";
 import { Sidebar } from "./features/catalog/Sidebar";
+import { useDimensionPicker } from "./features/catalog/useDimensionPicker";
 import { AnalysisView } from "./features/timeseries/AnalysisView";
 import { Landing } from "./features/home/Landing";
 import { SpatialView } from "./features/spatial/SpatialView";
@@ -255,6 +256,10 @@ export default function App() {
     return selectedVariables.find((v) => varId(v) === focusedVarId) ?? selectedVariables[0];
   }, [selectedVariables, focusedVarId]);
 
+  // Steps 5–6: functional groups and fleets, by EwE number.
+  const groupPicker = useDimensionPicker("group", selectedVariables, effectiveScenarios, freq, reloadToken, models.data);
+  const fleetPicker = useDimensionPicker("fleet", selectedVariables, effectiveScenarios, freq, reloadToken, models.data);
+
   const loading = tree.loading || models.loading;
   const error = tree.error || models.error;
 
@@ -440,6 +445,8 @@ export default function App() {
             focusedVarId={focusedVariable ? varId(focusedVariable) : null}
             onFocusVar={focusVar}
             effectiveScenarios={effectiveScenarios}
+            groups={groupPicker}
+            fleets={fleetPicker}
           />
           <main className="app__main">
             {selectedVariables.length > 0 ? (
@@ -450,8 +457,8 @@ export default function App() {
                 scenarioLabel={scenarioLabel}
                 scenariosForVar={effectiveScenarios}
                 availableScenarios={availableScenarios}
-                groups={groups}
-                fleets={fleets}
+                groupIds={groupPicker.effectiveIds}
+                fleetIds={fleetPicker.effectiveIds}
                 onRemove={removeVar}
                 onClear={clearVars}
                 focusedVariable={focusedVariable}
@@ -462,7 +469,8 @@ export default function App() {
             ) : (
               <div className="muted pad">
                 Pick models and scenarios (steps 1–2), then check one or more variables
-                (step 4) to build an analysis.
+                (step 4) and, for per-group or per-fleet variables, the groups and fleets
+                (steps 5–6) to build an analysis.
               </div>
             )}
           </main>

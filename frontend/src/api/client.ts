@@ -3,6 +3,8 @@ import type {
   BrowseResult,
   DataSource,
   DataSourceKind,
+  DimensionKind,
+  DimensionOption,
   ModelSummary,
   RasterEntry,
   RasterLayer,
@@ -108,6 +110,9 @@ export interface NotLocalInfo {
   cloud_only_files: number;
   cloud_only_bytes: number;
   files_checked: number;
+  // Rough download time -- on-demand OneDrive downloads run ~10 files/s
+  // (measured), so this scales with file count, not size.
+  estimated_seconds: number;
   // False on a server: nothing there can ask a sync app to download.
   can_download: boolean;
 }
@@ -120,6 +125,14 @@ export const api = {
   models: () => getJson<ModelSummary[]>("/catalog/models"),
   scenarios: () => getJson<ScenarioSummary[]>("/catalog/scenarios"),
   tree: () => getJson<ScenarioTreeNode[]>("/catalog/tree"),
+  // Groups or fleets present in these variables' data (time-series steps 5–6).
+  dimension: (kind: DimensionKind, params: { variable: string[]; freq: string; scenario: string[] }) => {
+    const q = new URLSearchParams();
+    params.variable.forEach((v) => q.append("variable", v));
+    q.set("freq", params.freq);
+    params.scenario.forEach((s) => q.append("scenario", s));
+    return getJson<DimensionOption[]>(`/catalog/${kind}s?${q.toString()}`);
+  },
 
   reload: () => postJson<ReloadResult>("/admin/reload"),
 
@@ -148,7 +161,9 @@ export const api = {
     model?: string[];
     scenario?: string[];
     group?: string[];
+    group_id?: number[];
     fleet?: string[];
+    fleet_id?: number[];
     year_from?: number;
     year_to?: number;
     month_from?: number;
@@ -160,7 +175,9 @@ export const api = {
     params.model?.forEach((m) => q.append("model", m));
     params.scenario?.forEach((s) => q.append("scenario", s));
     params.group?.forEach((g) => q.append("group", g));
+    params.group_id?.forEach((g) => q.append("group_id", String(g)));
     params.fleet?.forEach((f) => q.append("fleet", f));
+    params.fleet_id?.forEach((f) => q.append("fleet_id", String(f)));
     if (params.year_from != null) q.set("year_from", String(params.year_from));
     if (params.year_to != null) q.set("year_to", String(params.year_to));
     if (params.month_from != null) q.set("month_from", String(params.month_from));

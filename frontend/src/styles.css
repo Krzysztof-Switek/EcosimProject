@@ -60,7 +60,8 @@ body { margin: 0; background: var(--bg); color: var(--text); }
   overflow: hidden;
 }
 .step { border-bottom: 1px solid var(--border); flex-shrink: 0; }
-.step--grow { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* min-height keeps the variable list usable while steps 5–6 are open below it */
+.step--grow { flex: 1; min-height: 140px; display: flex; flex-direction: column; }
 .step__head {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 9px 12px; font-size: 13px; font-weight: 600; color: var(--text);
@@ -82,6 +83,8 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 
 /* step 1–2 pickers */
 .picker { max-height: 200px; overflow: auto; }
+/* steps 5–6 (groups, fleets) share the sidebar with the variable list */
+.picker--compact { max-height: 120px; }
 .picker__item {
   display: flex; align-items: center; gap: 8px; padding: 5px 6px;
   font-size: 13px; cursor: pointer; border-radius: 6px;
@@ -248,26 +251,14 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 
-/* multiselect */
+/* multiselect (box used by VariableSeriesPicker) */
 .multiselect { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .multiselect__head {
   display: flex; justify-content: space-between; align-items: center;
   padding: 8px 10px; background: var(--bg); font-size: 13px; font-weight: 600;
 }
 .multiselect__head .muted { font-weight: 400; font-size: 11px; }
-.multiselect__head--btn {
-  width: 100%; border: none; cursor: pointer; font-family: inherit; color: var(--text);
-}
-.multiselect__head--btn:hover { background: var(--border); }
-.multiselect__head-right { display: flex; align-items: center; gap: 8px; }
-.multiselect__chevron { font-size: 10px; color: var(--muted); }
-.multiselect__filter { width: 100%; border: none; border-bottom: 1px solid var(--border); padding: 6px 10px; font-size: 12px; }
 .multiselect__list { max-height: 220px; overflow: auto; }
-.multiselect__item {
-  display: flex; align-items: center; gap: 8px; padding: 5px 10px;
-  font-size: 13px; cursor: pointer;
-}
-.multiselect__item:hover { background: var(--bg); }
 
 /* landing (module choice) */
 .landing {

@@ -165,15 +165,19 @@ def add_source(body: AddSourceIn) -> SourceOut:
     # the UI explains and offers "Download and scan" (keep_local=True).
     # This is information, not a failure -- hence a structured 409 the
     # panel turns into a notice, instead of a failed-scan row.
+    # Only the files a scan of this kind actually needs are counted (see
+    # file_access._is_needed), so the size/time quoted is what really has to
+    # be downloaded.
     if not body.keep_local:
-        availability = scan_local_availability(path)
+        availability = scan_local_availability(path, body.kind)
         if availability.cloud_only:
             raise HTTPException(409, {
                 "code": "not_local",
-                "message": cloud_only_message(availability, path),
+                "message": cloud_only_message(availability),
                 "cloud_only_files": availability.cloud_only,
                 "cloud_only_bytes": availability.cloud_only_bytes,
                 "files_checked": availability.files_checked,
+                "estimated_seconds": availability.estimated_download_seconds,
                 "can_download": can_make_local(),
             })
 

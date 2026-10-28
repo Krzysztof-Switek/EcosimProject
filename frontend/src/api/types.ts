@@ -73,6 +73,17 @@ export interface TimeseriesRow {
   value: number | null;
 }
 
+/** A functional group or fleet present in the data (GET /catalog/groups, /catalog/fleets).
+ * EwE numbers both per model; most output files carry only that number, so `name` is
+ * usually null (no id->name dictionary exists -- see docs/ewe-data-formats.md §5). */
+export type DimensionKind = "group" | "fleet";
+
+export interface DimensionOption {
+  id: number;
+  name: string | null;
+  variables: string[]; // which of the requested variables contain it
+}
+
 export interface TimeseriesResponse {
   count: number;
   variable: string;
