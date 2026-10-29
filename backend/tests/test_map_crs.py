@@ -85,6 +85,19 @@ def test_map_crs_survives_registry_round_trip(tmp_path):
     assert registry.get(source.id).map_crs == "EPSG:3035"
 
 
+def test_folder_added_again_keeps_its_map_crs(tmp_path):
+    # Real case (2026-10-28): the same asc folder added a second time lost the
+    # CRS chosen for it, and the map was mis-placed again.
+    registry = WorkspaceRegistry(tmp_path / "config" / "workspaces.json")
+    first = registry.add_source("asc", tmp_path, "output")
+    registry.set_map_crs(first.id, "EPSG:3035")
+    again = registry.add_source("asc", tmp_path, "output")
+    assert registry.get(again.id).map_crs == "EPSG:3035"
+    other = tmp_path / "other"
+    other.mkdir()
+    assert registry.add_source("other", other, "output").map_crs is None
+
+
 def test_clear_materialized_removes_only_that_domains_cogs(tmp_path):
     out_tif = tmp_path / "scenario=s" / "domain=output" / "variable=biomass" / "cod__2004.tif"
     in_tif = tmp_path / "scenario=s" / "domain=input" / "variable=sst" / "x__2004.tif"

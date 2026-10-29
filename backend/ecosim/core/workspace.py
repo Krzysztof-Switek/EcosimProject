@@ -172,6 +172,15 @@ class WorkspaceRegistry:
             raise ValueError(f"Not a reachable directory: {path}")
         source = _new_source(name, path, kind, keep_local)
         data = self._load()
+        # The map CRS describes the folder's files, not this registry entry: a
+        # folder added again keeps the CRS the user already chose for it
+        # (otherwise re-adding it brought the "set the coordinate system" step,
+        # or a mis-placed map, straight back).
+        source.map_crs = next(
+            (s.get("map_crs") for s in reversed(data["sources"])
+             if s.get("map_crs") and Path(s["path"]) == path and s["kind"] == kind),
+            None,
+        )
         data["sources"].append(source.to_json())
         self._write(data)
         return source

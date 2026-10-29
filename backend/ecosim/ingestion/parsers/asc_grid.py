@@ -140,6 +140,45 @@ def parse_input_filename(name: str, *, driver: str) -> AscGridMeta | None:
                         entity_name=None, year=int(m.group(0)))
 
 
+def grid_crs(
+    src_name: str,
+    bounds: tuple[float, float, float, float],
+    *,
+    source_crs_wkt: str | None = None,
+    map_crs: str | None = None,
+):
+    """The CRS one ``.asc`` grid is really in: ``map_crs`` (set by the user for
+    the data source, e.g. ``"EPSG:3035"``) if given, else ``source_crs_wkt``
+    (the ``CoordinateSystemWKT`` from this run's Ecospace ``RunInfo.txt``), else
+    WGS84 (input driver grids have no RunInfo.txt). Raises ``MapCrsError`` if
+    the grid's ``bounds`` can't be degrees although that CRS says they are."""
+    from rasterio.crs import CRS
+
+    if map_crs:
+        src_crs = CRS.from_user_input(map_crs)
+    elif source_crs_wkt:
+        # EwE's own RunInfo.txt export quotes WKT string literals with ' rather
+        # than the " standard OGC WKT requires (confirmed against a real file:
+        # rasterio's parser rejects it as-is, "OGR Error code 5") -- normalize
+        # before parsing.
+        src_crs = CRS.from_wkt(source_crs_wkt.replace("'", '"'))
+    else:
+        src_crs = CRS.from_string(WGS84)
+
+    crs_label = map_crs or (f"EPSG:{src_crs.to_epsg()}" if src_crs.to_epsg() else src_crs.to_string())
+    if src_crs.is_geographic and not _plausible_in_degrees(bounds):
+        raise MapCrsError(
+            f"{src_name}: the map's coordinates (x {bounds[0]:,.0f} to {bounds[2]:,.0f}, "
+            f"y {bounds[1]:,.0f} to {bounds[3]:,.0f}) can't be degrees, but its coordinate system "
+            f"is {crs_label} ({src_crs.to_string() if map_crs else 'as declared by EwE'}), which is "
+            "in degrees. The map is most likely on a metric grid -- choose the coordinate system "
+            "it was built on.",
+            crs=crs_label,
+            bounds=bounds,
+        )
+    return src_crs
+
+
 def write_cog(
     src_path: Path,
     out_path: Path,
@@ -149,10 +188,7 @@ def write_cog(
 ) -> dict:
     """Convert one ``.asc`` grid to a WGS84 Cloud-Optimized GeoTIFF.
 
-    The grid's own CRS is ``map_crs`` (set by the user for the data source,
-    e.g. ``"EPSG:3035"``) if given, else ``source_crs_wkt`` (the
-    ``CoordinateSystemWKT`` from this run's Ecospace ``RunInfo.txt``), else
-    WGS84 (input driver grids have no RunInfo.txt). A grid in a projected CRS
+    The grid's own CRS is resolved by :func:`grid_crs`. A grid in a projected CRS
     (Ecospace's "Assume Square Cells" mode, or a model built on a metric grid)
     is reprojected to WGS84 with nearest-neighbour resampling, so cell values
     are copied, never interpolated. Raises ``MapCrsError`` if the coordinates
@@ -167,33 +203,12 @@ def write_cog(
     from rasterio.crs import CRS
     from rasterio.warp import Resampling, calculate_default_transform, reproject
 
-    if map_crs:
-        src_crs = CRS.from_user_input(map_crs)
-    elif source_crs_wkt:
-        # EwE's own RunInfo.txt export quotes WKT string literals with ' rather
-        # than the " standard OGC WKT requires (confirmed against a real file:
-        # rasterio's parser rejects it as-is, "OGR Error code 5") -- normalize
-        # before parsing.
-        src_crs = CRS.from_wkt(source_crs_wkt.replace("'", '"'))
-    else:
-        src_crs = CRS.from_string(WGS84)
-
     with rasterio.open(src_path) as src:
         data = src.read(1)
         profile = src.profile.copy()
         bounds = tuple(src.bounds)
 
-    crs_label = map_crs or (f"EPSG:{src_crs.to_epsg()}" if src_crs.to_epsg() else src_crs.to_string())
-    if src_crs.is_geographic and not _plausible_in_degrees(bounds):
-        raise MapCrsError(
-            f"{src_path.name}: the map's coordinates (x {bounds[0]:,.0f} to {bounds[2]:,.0f}, "
-            f"y {bounds[1]:,.0f} to {bounds[3]:,.0f}) can't be degrees, but its coordinate system "
-            f"is {crs_label} ({src_crs.to_string() if map_crs else 'as declared by EwE'}), which is "
-            "in degrees. The map is most likely on a metric grid -- choose the coordinate system "
-            "it was built on.",
-            crs=crs_label,
-            bounds=bounds,
-        )
+    src_crs = grid_crs(src_path.name, bounds, source_crs_wkt=source_crs_wkt, map_crs=map_crs)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if src_crs.to_epsg() != 4326:

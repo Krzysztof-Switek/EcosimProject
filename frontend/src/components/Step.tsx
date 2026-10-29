@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 export function Step({
   n,
   title,
+  tag,
   hint,
   open,
   onToggle,
@@ -12,6 +13,8 @@ export function Step({
 }: {
   n?: number;
   title: string;
+  /** Shown as a highlighted chip after the title -- e.g. which variable the step's settings belong to. */
+  tag?: string;
   hint?: string;
   open: boolean;
   onToggle: () => void;
@@ -22,7 +25,10 @@ export function Step({
     <div className="step">
       <button className="step__head step__head--btn" onClick={onToggle}>
         {n != null && <span className="step__n">{n}</span>}
-        <span className="step__title">{title}</span>
+        <span className="step__title">
+          {title}
+          {tag && <span className="step__tag">{tag}</span>}
+        </span>
         {hint && <span className="step__hint muted">{hint}</span>}
         <span className="catalog__chevron">{open ? "▾" : "▸"}</span>
       </button>

@@ -5,6 +5,7 @@ import "leaflet-draw";
 import "leaflet-draw/dist/leaflet.draw.css";
 import parseGeoraster from "georaster";
 import type { GeoRaster } from "georaster-layer-for-leaflet";
+import { fetchGet } from "../../api/client";
 import type { MapCrsMismatch } from "../../api/types";
 import { makeValueToColor, type PaletteId } from "./colorScale";
 import { MapCrsFix } from "./MapCrsFix";
@@ -47,11 +48,14 @@ function buildRowReprojection(height: number, ymin: number, ymax: number): Int32
   const mercMax = mercatorY(ymax);
   const mercMin = mercatorY(ymin);
   const out = new Int32Array(height);
+  // Sample at each output row's centre, and take the source row whose cell
+  // contains it -- mapping row edges to edges (i / (height - 1)) shifted the
+  // image by up to half a cell, visibly past an area-of-interest outline.
   for (let i = 0; i < height; i++) {
-    const mercY = mercMax + (mercMin - mercMax) * (height === 1 ? 0 : i / (height - 1));
+    const mercY = mercMax + (mercMin - mercMax) * ((i + 0.5) / height);
     const lat = inverseMercatorY(mercY);
     const srcFrac = (ymax - lat) / (ymax - ymin || 1);
-    out[i] = Math.min(height - 1, Math.max(0, Math.round(srcFrac * (height - 1))));
+    out[i] = Math.min(height - 1, Math.max(0, Math.floor(srcFrac * height)));
   }
   return out;
 }
@@ -71,7 +75,7 @@ function projectToPixel(
   const mercMax = mercatorY(ymax);
   const mercMin = mercatorY(ymin);
   const frac = (mercatorY(lat) - mercMax) / (mercMin - mercMax || 1);
-  return [x, frac * (height - 1)];
+  return [x, frac * height];
 }
 
 /** Trace every ring of every Polygon/MultiPolygon feature of every selected area into the
@@ -102,16 +106,19 @@ function traceAoiPath(ctx: CanvasRenderingContext2D, aois: GeoJSON.FeatureCollec
 
 /**
  * Render one band of a (small, fixed-extent) georaster to a colored canvas,
- * clipped to the AOI if set, as a data URL ready for L.imageOverlay. Fully
- * synchronous -- no tile loading, so no async gap for a swap to flicker through.
+ * clipped to the AOI if set -- rows already warped to Web Mercator, so it
+ * goes straight onto a Mercator map between the raster's corners. Fully
+ * synchronous -- no tile loading, so no async gap for a swap to flicker
+ * through. Also used for the frames of an exported animation
+ * (exportAnimation.ts), so they look exactly like the screen.
  */
-function renderRaster(
+export function renderRasterCanvas(
   georaster: GeoRaster,
   aois: GeoJSON.FeatureCollection[],
   palette: PaletteId,
   invert: boolean,
   domainOverride: RasterStats | null,
-): RasterStats & { url: string; dataMin: number; dataMax: number } {
+): RasterStats & { canvas: HTMLCanvasElement; dataMin: number; dataMax: number } {
   const band = georaster.values?.[0];
   if (!band) throw new Error("Raster has no pixel data");
   const { width, height, noDataValue, ymin, ymax } = georaster;
@@ -165,13 +172,86 @@ function renderRaster(
     ctx.drawImage(dataCanvas, 0, 0);
   }
 
-  return { url: canvas.toDataURL(), min, max, dataMin, dataMax };
+  return { canvas, min, max, dataMin, dataMax };
+}
+
+/** renderRasterCanvas as a data URL, ready for L.imageOverlay. */
+function renderRaster(
+  georaster: GeoRaster,
+  aois: GeoJSON.FeatureCollection[],
+  palette: PaletteId,
+  invert: boolean,
+  domainOverride: RasterStats | null,
+): RasterStats & { url: string; dataMin: number; dataMax: number } {
+  const { canvas, ...stats } = renderRasterCanvas(georaster, aois, palette, invert, domainOverride);
+  return { url: canvas.toDataURL(), ...stats };
 }
 
 /** A small, fixed rotation of outline colors so multiple simultaneously-selected
  * areas stay visually distinguishable on the map -- independent of the data
  * color palette, which is a different concern (magnitude, not identity). */
-const AOI_OUTLINE_COLORS = ["#eb6834", "#2f6fed", "#1fa87a", "#c23fd0", "#c2a83f", "#e0475b"];
+export const AOI_OUTLINE_COLORS = ["#eb6834", "#2f6fed", "#1fa87a", "#c23fd0", "#c2a83f", "#e0475b"];
+
+// The furthest the map can be zoomed out or panned: one copy of the world.
+const WORLD_BOUNDS = L.latLngBounds([-85, -180], [85, 180]);
+
+/**
+ * Keeps several maps showing the same view: panning or zooming one moves the
+ * others (side-by-side group maps are compared cell by cell).
+ */
+export class MapViewSync {
+  private maps = new Set<L.Map>();
+  private syncing = false;
+  // Each map's own "whole world in view" zoom. Maps a pixel apart in width can
+  // land on different whole zoom levels, which let one of them zoom out a step
+  // further than the rest -- so all of them get the lowest.
+  private fitZooms = new Map<L.Map, number>();
+
+  setFitZoom(map: L.Map, zoom: number) {
+    this.fitZooms.set(map, zoom);
+    this.applyMinZoom();
+  }
+
+  private applyMinZoom() {
+    const min = Math.min(...this.fitZooms.values());
+    for (const m of this.fitZooms.keys()) m.setMinZoom(min);
+  }
+
+  add(map: L.Map): () => void {
+    const onMove = () => {
+      if (this.syncing) return;
+      this.syncing = true;
+      try {
+        for (const other of this.maps) {
+          if (other !== map) other.setView(map.getCenter(), map.getZoom(), { animate: false });
+        }
+      } finally {
+        this.syncing = false;
+      }
+    };
+    this.maps.add(map);
+    map.on("move", onMove);
+    return () => {
+      map.off("move", onMove);
+      this.maps.delete(map);
+      this.fitZooms.delete(map);
+      if (this.fitZooms.size > 0) this.applyMinZoom();
+    };
+  }
+}
+
+/**
+ * Zooming out stops at the whole world in view (to see the model's area
+ * against the rest of it), never further. Without a limit, zooming out with
+ * the mouse wheel showed the basemap repeated across the screen and the view
+ * drifted off with no way back. Depends on the map's size, so it's re-applied
+ * whenever that changes.
+ */
+function limitZoomToWorld(map: L.Map, viewSync?: MapViewSync) {
+  const worldZoom = map.getBoundsZoom(WORLD_BOUNDS);
+  if (viewSync) viewSync.setFitZoom(map, worldZoom);
+  else map.setMinZoom(worldZoom);
+}
 
 export function RasterMap({
   rasterUrl,
@@ -182,6 +262,9 @@ export function RasterMap({
   palette,
   invert,
   domainOverride,
+  reloadToken = 0,
+  onCrsFixed,
+  viewSync,
 }: {
   rasterUrl: string | null;
   /** Fetched+parsed into the cache in the background, without touching the visible layer. */
@@ -196,11 +279,20 @@ export function RasterMap({
   invert: boolean;
   /** Manual color-scale domain; null means auto (scale to this raster's own min/max). */
   domainOverride: RasterStats | null;
+  /** Bumped by the parent after a source's CRS is fixed: same URLs, but the server now
+   * converts differently, so everything cached is stale. */
+  reloadToken?: number;
+  /** The CRS was fixed from this map's panel -- the parent bumps reloadToken for every map. */
+  onCrsFixed: () => void;
+  /** Shared with the other maps on screen so they all pan/zoom together. */
+  viewSync?: MapViewSync;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const overlayRef = useRef<L.ImageOverlay | null>(null);
   const fittedRef = useRef<string | null>(null); // extent the view was last fitted to
+  const extentRef = useRef<L.LatLngBounds | null>(null); // grid the view was last fitted to
+  const reloadTokenRef = useRef(reloadToken);
   const drawnItemsRef = useRef<L.FeatureGroup | null>(null);
   const displayLayerRef = useRef<L.LayerGroup | null>(null);
   // Parsed rasters are immutable once fetched (raw .asc is immutable, and the
@@ -212,16 +304,20 @@ export function RasterMap({
   const [error, setError] = useState<string | null>(null);
   // The map's declared CRS can't be right -- offer to pick the real one (MapCrsFix).
   const [crsMismatch, setCrsMismatch] = useState<MapCrsMismatch | null>(null);
-  // Bumped after the CRS is fixed: same URL, but the server now converts differently.
-  const [refetchToken, setRefetchToken] = useState(0);
 
   // Create the base map, its draw toolbar, and the editable AOI layer group once.
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
-    const map = L.map(containerRef.current, { center: BALTIC_CENTER, zoom: BALTIC_ZOOM });
+    const map = L.map(containerRef.current, {
+      center: BALTIC_CENTER,
+      zoom: BALTIC_ZOOM,
+      maxBounds: WORLD_BOUNDS,
+      maxBoundsViscosity: 1, // a hard edge, not a rubber band
+    });
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       maxZoom: 12,
+      noWrap: true, // one world, not copies of it side by side
     }).addTo(map);
 
     // Scratch group only -- used to build GeoJSON from a freshly-drawn shape
@@ -265,7 +361,19 @@ export function RasterMap({
     });
 
     mapRef.current = map;
+    const leaveSync = viewSync?.add(map);
+    limitZoomToWorld(map, viewSync);
+    // The container changes size when maps are added or removed beside it --
+    // re-measure, and re-frame the grid for the new size.
+    const resizeObserver = new ResizeObserver(() => {
+      map.invalidateSize({ animate: false });
+      limitZoomToWorld(map, viewSync);
+      if (extentRef.current) map.fitBounds(extentRef.current, { animate: false });
+    });
+    resizeObserver.observe(containerRef.current);
     return () => {
+      resizeObserver.disconnect();
+      leaveSync?.();
       map.remove();
       mapRef.current = null;
       drawnItemsRef.current = null;
@@ -299,6 +407,10 @@ export function RasterMap({
       setLoading(false);
       return;
     }
+    if (reloadTokenRef.current !== reloadToken) {
+      reloadTokenRef.current = reloadToken;
+      cacheRef.current.clear(); // everything parsed so far was converted under the old CRS
+    }
     const cached = cacheRef.current.get(rasterUrl);
     if (cached) {
       setGeoraster(cached);
@@ -313,7 +425,7 @@ export function RasterMap({
       if (!cancelled) setLoading(true);
     }, LOADING_INDICATOR_DELAY_MS);
 
-    fetch(rasterUrl)
+    fetchGet(rasterUrl)
       .then(async (res) => {
         if (!res.ok) {
           const body = await res.json().catch(() => null);
@@ -345,7 +457,7 @@ export function RasterMap({
       cancelled = true;
       clearTimeout(showLoadingTimer);
     };
-  }, [rasterUrl, refetchToken]);
+  }, [rasterUrl, reloadToken]);
 
   // Warm the cache for the predicted next raster (autoplay/scrubbing forward)
   // while the current one is on screen, so that transition is a cache hit
@@ -354,7 +466,7 @@ export function RasterMap({
   useEffect(() => {
     if (!prefetchUrl || cacheRef.current.has(prefetchUrl)) return;
     let cancelled = false;
-    fetch(prefetchUrl)
+    fetchGet(prefetchUrl)
       .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(String(res.status)))))
       .then(parseGeoraster)
       .then((g) => {
@@ -385,23 +497,22 @@ export function RasterMap({
 
     const aoiGeojsons = selectedAois.map((a) => a.geojson);
     const { url, min, max, dataMin, dataMax } = renderRaster(georaster, aoiGeojsons, palette, invert, domainOverride);
-    const bounds: L.LatLngBoundsExpression = [
-      [georaster.ymin, georaster.xmin],
-      [georaster.ymax, georaster.xmax],
-    ];
+    const bounds = L.latLngBounds([georaster.ymin, georaster.xmin], [georaster.ymax, georaster.xmax]);
     if (overlayRef.current) {
       overlayRef.current.setUrl(url);
       // Normally the same fixed grid every frame, but not after a source's
       // CRS is corrected (the reprojected grid has different bounds).
-      overlayRef.current.setBounds(L.latLngBounds(bounds));
+      overlayRef.current.setBounds(bounds);
     } else {
       overlayRef.current = L.imageOverlay(url, bounds).addTo(map);
     }
-    // Fit once per grid extent, so stepping through years never moves the
-    // user's view, but a different grid (another model, a CRS fix) is framed.
+    // Fit once per grid extent, so stepping through years never
+    // moves the user's view, but a different grid (another model, a CRS fix)
+    // is framed.
     const boundsKey = [georaster.xmin, georaster.ymin, georaster.xmax, georaster.ymax].join(",");
     if (fittedRef.current !== boundsKey) {
-      map.fitBounds(bounds);
+      extentRef.current = bounds;
+      map.fitBounds(bounds, { animate: false });
       fittedRef.current = boundsKey;
     }
     onStats({ min, max, dataMin, dataMax });
@@ -420,10 +531,8 @@ export function RasterMap({
         <MapCrsFix
           info={crsMismatch}
           onApplied={() => {
-            // Everything parsed so far was converted under the old CRS.
-            cacheRef.current.clear();
             setCrsMismatch(null);
-            setRefetchToken((t) => t + 1);
+            onCrsFixed();
           }}
         />
       ) : (

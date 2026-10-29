@@ -1,10 +1,12 @@
 import { gradientCss, type PaletteId } from "./colorScale";
 import type { RasterStats } from "./RasterMap";
 
-function formatValue(v: number): string {
+export function formatValue(v: number): string {
   const abs = Math.abs(v);
   if (abs !== 0 && (abs < 0.001 || abs >= 100000)) return v.toExponential(2);
-  return v.toLocaleString(undefined, { maximumFractionDigits: abs < 10 ? 3 : 1 });
+  // English number format whatever the browser's locale: in a Polish browser
+  // 1.371 came out as "1,371", which an English UI reads as one thousand.
+  return v.toLocaleString("en-US", { maximumFractionDigits: abs < 10 ? 3 : 1 });
 }
 
 export function RasterLegend({

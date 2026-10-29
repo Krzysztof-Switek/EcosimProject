@@ -3,8 +3,9 @@ import { api } from "../../api/client";
 import { useAsync } from "../../api/useAsync";
 import type { DimItem, RasterEntry } from "../../api/types";
 import { Step } from "../../components/Step";
-import { RasterMap, type RasterStats } from "./RasterMap";
+import { MapViewSync, RasterMap, type RasterStats } from "./RasterMap";
 import { RasterLegend } from "./RasterLegend";
+import { ExportPanel } from "./ExportPanel";
 import { PALETTE_OPTIONS, PALETTE_SWATCH, type PaletteId } from "./colorScale";
 
 const AOI_STORAGE_KEY = "ecosim.aois.v2";
@@ -78,6 +79,52 @@ function sortByDict(names: string[], dict: DimItem[]): string[] {
   });
 }
 
+type MapStats = RasterStats & { dataMin: number; dataMax: number };
+
+/**
+ * What each variable remembers for itself: its groups/fleets, year range and
+ * colour scale. Switching between the checked variables (the pills above the
+ * map) brings back that variable's own choices, and the download applies each
+ * variable's own -- Biomass of two groups on a fixed scale next to Catch of
+ * another group over a narrower range, say.
+ */
+export interface VariableSettings {
+  /** Checked groups/fleets; null = not chosen yet (the first one gets checked). */
+  entities: string[] | null;
+  /** Custom sub-range within the available years; null = from/to the first/last year. */
+  yearMin: number | null;
+  yearMax: number | null;
+  palette: PaletteId;
+  invert: boolean;
+  domainMode: "auto" | "manual";
+  manualMin: string;
+  manualMax: string;
+}
+
+const DEFAULT_VARIABLE_SETTINGS: VariableSettings = {
+  entities: null,
+  yearMin: null,
+  yearMax: null,
+  palette: "blue",
+  invert: false,
+  domainMode: "auto",
+  manualMin: "",
+  manualMax: "",
+};
+
+/** The fixed colour-scale range, or null for auto (each map scaled to its own range). */
+export function domainOf(settings: VariableSettings): RasterStats | null {
+  const min = Number(settings.manualMin);
+  const max = Number(settings.manualMax);
+  if (
+    settings.domainMode !== "manual" || settings.manualMin === "" || settings.manualMax === ""
+    || Number.isNaN(min) || Number.isNaN(max)
+  ) {
+    return null;
+  }
+  return { min, max };
+}
+
 export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: DimItem[] }) {
   const layers = useAsync(() => api.spatialLayers(), []);
 
@@ -86,7 +133,7 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
   // collapses it), matching the timeseries Sidebar's Step behavior this view
   // already mirrors, but defaulting closed here to keep the sidebar short.
   const [collapsedSteps, setCollapsedSteps] = useState<Set<string>>(
-    () => new Set(["scenario", "variable", "entity", "year", "color", "aoi"]),
+    () => new Set(["scenario", "variable", "entity", "year", "color", "aoi", "export"]),
   );
   const isStepOpen = (id: string) => !collapsedSteps.has(id);
   const toggleStep = (id: string) =>
@@ -104,18 +151,27 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
   // R-analysis step would act on -- same "select now, use later" pattern as
   // the area-of-interest library.
   const [selectedVariables, setSelectedVariables] = useState<Set<string>>(new Set());
-  const [entity, setEntity] = useState<string | null>(null);
-  // Same mark-for-later + click-to-focus pattern as selectedVariables, for
-  // the Group/Fleet step.
-  const [selectedEntities, setSelectedEntities] = useState<Set<string>>(new Set());
+  // Groups/fleets (step 3), year range (step 4) and colour scale (step 5),
+  // separately for each variable -- see VariableSettings.
+  const [settingsByVariable, setSettingsByVariable] = useState<Record<string, VariableSettings>>({});
+  const settings = (variable && settingsByVariable[variable]) || DEFAULT_VARIABLE_SETTINGS;
+  const updateSettings = (patch: Partial<VariableSettings>) => {
+    if (!variable) return;
+    setSettingsByVariable((prev) => ({
+      ...prev,
+      [variable]: { ...(prev[variable] ?? DEFAULT_VARIABLE_SETTINGS), ...patch },
+    }));
+  };
+  // The year on screen is shared: switching variables shows the same year,
+  // kept inside the newly shown variable's range.
   const [year, setYear] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
-  // Custom sub-range within the available years (null = use the full
-  // available range) -- lets the user narrow the slider/autoplay to only the
-  // years they care about instead of always spanning everything on offer.
-  const [customYearMin, setCustomYearMin] = useState<number | null>(null);
-  const [customYearMax, setCustomYearMax] = useState<number | null>(null);
-  const [stats, setStats] = useState<(RasterStats & { dataMin: number; dataMax: number }) | null>(null);
+  // Per map (keyed like the maps themselves, see mapPanels).
+  const [statsByMap, setStatsByMap] = useState<Record<string, MapStats>>({});
+  // Bumped once a source's CRS is fixed, so every map on screen re-fetches.
+  const [crsReloadToken, setCrsReloadToken] = useState(0);
+  // All maps on screen pan and zoom together.
+  const viewSync = useMemo(() => new MapViewSync(), []);
   const [aois, setAois] = useState<NamedAoi[]>(() => loadStoredAois().aois);
   const [selectedAoiIds, setSelectedAoiIds] = useState<string[]>(() => loadStoredAois().selectedAoiIds);
   const [aoiError, setAoiError] = useState<string | null>(null);
@@ -128,25 +184,15 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
     [aois, selectedAoiIds],
   );
 
-  // Color scale: palette/invert are sticky display preferences; the domain
-  // (auto vs. a manually fixed min/max) resets whenever the data series
-  // changes, since a range fixed for one variable rarely makes sense for another.
-  const [palette, setPalette] = useState<PaletteId>("blue");
-  const [invert, setInvert] = useState(false);
-  const [domainMode, setDomainMode] = useState<"auto" | "manual">("auto");
-  const [manualMin, setManualMin] = useState("");
-  const [manualMax, setManualMax] = useState("");
+  const { palette, invert, domainMode, manualMin, manualMax } = settings;
   // Memoized: a fresh object literal here every render (this component
   // re-renders often, e.g. on every autoplay tick) would make RasterMap's
   // effect see a "changed" prop each time and re-run forever.
-  const domainOverride: RasterStats | null = useMemo(() => {
-    const min = Number(manualMin);
-    const max = Number(manualMax);
-    if (domainMode !== "manual" || manualMin === "" || manualMax === "" || Number.isNaN(min) || Number.isNaN(max)) {
-      return null;
-    }
-    return { min, max };
-  }, [domainMode, manualMin, manualMax]);
+  const domainOverride: RasterStats | null = useMemo(
+    () => domainOf(settings),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [domainMode, manualMin, manualMax],
+  );
 
   useEffect(() => {
     try {
@@ -223,29 +269,29 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
         ? "fleet"
         : null;
 
+  // Bumped by the "Retry" shown when the variable's map list failed to load.
+  const [rastersRetry, setRastersRetry] = useState(0);
   const rasters = useAsync(
     () => (scenario && variable ? api.spatialRasters({ scenario, variable }) : Promise.resolve<RasterEntry[]>([])),
-    [scenario, variable],
+    [scenario, variable, rastersRetry],
   );
 
   const entityNames = useMemo(() => {
     if (!hasEntity) return [];
     const names = new Set<string>();
     for (const r of rasters.data ?? []) {
+      // Right after switching variables rasters.data still holds the previous
+      // variable's list -- its names would be taken for this one's (and the
+      // first-time pick below would check a group this variable doesn't have).
+      if (r.variable !== variable || r.scenario !== scenario) continue;
       const n = entityKind === "group" ? r.group_name : r.fleet_name;
       if (n) names.add(n);
     }
     return sortByDict([...names], entityKind === "group" ? groups : fleets);
-  }, [rasters.data, hasEntity, entityKind, groups, fleets]);
+  }, [rasters.data, variable, scenario, hasEntity, entityKind, groups, fleets]);
 
-  // Marks can span both Group- and Fleet-typed variables (independent lists
-  // sharing one Set -- marking "Ringed seal" while viewing a group-typed
-  // variable and "Traps and pots" while viewing a fleet-typed one both land
-  // in selectedEntities, which is fine). But anything RENDERED from that Set
-  // must be filtered to the currently-focused variable's entity kind, or a
-  // mark from the other kind leaks in as a bogus, clickable pill (e.g. a
-  // group name offered as a "fleet"). entityNames is already scoped to
-  // entityKind, so filter through it rather than reading selectedEntities raw.
+  const selectedEntities = useMemo(() => new Set(settings.entities ?? []), [settings.entities]);
+  // In the order of the list, and only names this variable's maps really have.
   const visibleSelectedEntities = useMemo(
     () => entityNames.filter((n) => selectedEntities.has(n)),
     [entityNames, selectedEntities],
@@ -255,8 +301,7 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
   useEffect(() => {
     setVariable(null);
     setSelectedVariables(new Set());
-    setEntity(null);
-    setSelectedEntities(new Set());
+    setSettingsByVariable({});
     setYear(null);
     setPlaying(false);
   }, [scenario]);
@@ -284,52 +329,41 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
     setSelectedVariables((prev) => (prev.has(v) ? prev : new Set(prev).add(v)));
   };
 
-  const toggleEntitySelected = (n: string) =>
-    setSelectedEntities((prev) => {
-      const next = new Set(prev);
-      next.has(n) ? next.delete(n) : next.add(n);
-      return next;
-    });
-
-  const focusEntity = (n: string) => {
-    setEntity(n);
-    setSelectedEntities((prev) => (prev.has(n) ? prev : new Set(prev).add(n)));
+  const toggleEntitySelected = (n: string) => {
+    const next = new Set(selectedEntities);
+    next.has(n) ? next.delete(n) : next.add(n);
+    updateSettings({ entities: [...next] });
   };
 
-  // Switching which marked variable is focused (checkbox stays, only the
-  // shown one changes) must NOT wipe entity marks or the chosen year --
-  // only things genuinely calibrated to one variable's data reset here: the
-  // color-scale domain and the custom year sub-range (a fixed range or a
-  // narrowed year window from Biomass rarely fits Catch). The entity/year
-  // *values* persist -- see the fallback and clamp effects below.
+  // Switching variables stops autoplay; everything chosen for a variable stays
+  // with it (VariableSettings).
   useEffect(() => {
     setPlaying(false);
-    setDomainMode("auto");
-    setManualMin("");
-    setManualMax("");
-    setCustomYearMin(null);
-    setCustomYearMax(null);
   }, [variable]);
 
+  // Prefilled with the range across every map on screen, so one fixed scale
+  // makes the maps directly comparable.
   const enableManualDomain = () => {
-    if (stats) {
-      setManualMin(String(stats.dataMin));
-      setManualMax(String(stats.dataMax));
-    }
-    setDomainMode("manual");
+    const all = Object.values(statsByMap);
+    updateSettings({
+      domainMode: "manual",
+      ...(all.length > 0
+        ? {
+            manualMin: String(Math.min(...all.map((s) => s.dataMin))),
+            manualMax: String(Math.max(...all.map((s) => s.dataMax))),
+          }
+        : {}),
+    });
   };
 
-  // Keep the focused entity valid for whichever variable is now focused: if
-  // it's still in this variable's entity list, leave it alone (this is what
-  // makes a focus-switch preserve your place instead of jumping back to the
-  // first group every time). Otherwise fall back to one that's already
-  // marked and still valid, else the first available -- same as the
-  // original first-ever pick, via the existing focusEntity() (which also
-  // marks it). Also seeds the year on the very first pick.
+  // A variable shown for the first time starts with its first group/fleet
+  // checked, so picking a variable always shows a map. Only the first time:
+  // unchecking every group afterwards leaves none. Also seeds the year on the
+  // very first pick.
   useEffect(() => {
     if (!activeLayer) return;
-    if (hasEntity && entityNames.length > 0 && (entity == null || !entityNames.includes(entity))) {
-      focusEntity(entityNames.find((n) => selectedEntities.has(n)) ?? entityNames[0]);
+    if (hasEntity && entityNames.length > 0 && settings.entities == null) {
+      updateSettings({ entities: [entityNames[0]] });
     }
     if (year == null) setYear(activeLayer.year_max);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -337,8 +371,27 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
 
   // Effective slider/autoplay bounds: the full available range, narrowed to
   // whatever the user typed into the range inputs (if anything).
-  const yearLo = customYearMin ?? activeLayer?.year_min ?? 0;
-  const yearHi = customYearMax ?? activeLayer?.year_max ?? 0;
+  const yearLo = settings.yearMin ?? activeLayer?.year_min ?? 0;
+  const yearHi = settings.yearMax ?? activeLayer?.year_max ?? 0;
+
+  // Each checked variable with its own settings -- what the download exports.
+  const exportItems = [...selectedVariables].flatMap((v) => {
+    const layer = variablesForScenario.find((l) => l.variable === v);
+    if (!layer) return [];
+    const vs = settingsByVariable[v] ?? DEFAULT_VARIABLE_SETTINGS;
+    return [{
+      variable: v,
+      entities: vs.entities ?? [],
+      yearFrom: vs.yearMin ?? layer.year_min,
+      yearTo: vs.yearMax ?? layer.year_max,
+      palette: vs.palette,
+      invert: vs.invert,
+      domainOverride: domainOf(vs),
+    }];
+  });
+
+  // Which variable steps 3-5 apply to, as a chip in their headers once several are checked.
+  const forVariable = selectedVariables.size > 1 && variable ? formatLabel(variable) : undefined;
 
   // Keep the current year inside the (possibly just-narrowed) range.
   useEffect(() => {
@@ -360,30 +413,60 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
     return () => clearInterval(id);
   }, [playing, activeLayer, yearLo, yearHi]);
 
-  const findRasterForYear = (y: number) =>
-    (rasters.data ?? []).find(
-      (r) =>
-        r.year === y &&
-        (!hasEntity || (entityKind === "group" ? r.group_name === entity : r.fleet_name === entity)),
-    ) ?? null;
-
-  const activeRaster = useMemo(
-    () => (scenario && variable && year != null ? findRasterForYear(year) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rasters.data, scenario, variable, year, hasEntity, entityKind, entity],
-  );
-  const rasterUrl = activeRaster ? api.spatialRasterUrl(activeRaster.id) : null;
-
-  // Fetch+parse the next year in the background while the current one is
-  // showing, so autoplay/scrubbing forward rarely has to wait on a fresh
-  // server-side conversion -- see RasterMap's cache.
-  const nextRaster = useMemo(() => {
-    if (!scenario || !variable || year == null || !activeLayer) return null;
+  // One map per checked group/fleet (a single map for a variable without
+  // them), each with the raster for the current year, plus the next year's to
+  // fetch+parse in the background so autoplay/scrubbing forward rarely waits
+  // on a fresh server-side conversion -- see RasterMap's cache.
+  const mapPanels = useMemo(() => {
+    if (!scenario || !variable || year == null || !activeLayer) return [];
     const nextYear = year >= activeLayer.year_max ? activeLayer.year_min : year + 1;
-    return findRasterForYear(nextYear);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rasters.data, scenario, variable, year, activeLayer, hasEntity, entityKind, entity]);
-  const prefetchUrl = nextRaster ? api.spatialRasterUrl(nextRaster.id) : null;
+    const findRaster = (y: number, ent: string | null) =>
+      (rasters.data ?? []).find(
+        (r) =>
+          r.year === y &&
+          r.variable === variable && // not the previous variable's list, still there right after a switch
+          (ent == null || (entityKind === "group" ? r.group_name === ent : r.fleet_name === ent)),
+      ) ?? null;
+    return (hasEntity ? visibleSelectedEntities : [null]).map((ent) => {
+      const current = findRaster(year, ent);
+      const next = findRaster(nextYear, ent);
+      return {
+        key: ent ?? "",
+        title: ent,
+        rasterUrl: current ? api.spatialRasterUrl(current.id) : null,
+        prefetchUrl: next ? api.spatialRasterUrl(next.id) : null,
+      };
+    });
+  }, [rasters.data, scenario, variable, year, activeLayer, hasEntity, entityKind, visibleSelectedEntities]);
+
+  // Stable per-map stats callbacks: RasterMap reports stats from an effect,
+  // and a new function every render must not look like a changed prop.
+  const statsSetters = useRef(new Map<string, (s: MapStats | null) => void>());
+  const statsSetterFor = (key: string) => {
+    let fn = statsSetters.current.get(key);
+    if (!fn) {
+      fn = (s) =>
+        setStatsByMap((prev) => {
+          const next = { ...prev };
+          if (s) next[key] = s;
+          else delete next[key];
+          return next;
+        });
+      statsSetters.current.set(key, fn);
+    }
+    return fn;
+  };
+  // Drop stats of maps no longer on screen (they'd skew the fixed-range prefill).
+  useEffect(() => {
+    const keys = new Set(mapPanels.map((p) => p.key));
+    setStatsByMap((prev) => {
+      const stale = Object.keys(prev).filter((k) => !keys.has(k));
+      if (stale.length === 0) return prev;
+      const next = { ...prev };
+      for (const k of stale) delete next[k];
+      return next;
+    });
+  }, [mapPanels]);
 
   const loading = layers.loading;
   const error = layers.error;
@@ -446,7 +529,7 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
           {variablesForScenario.map((l) => (
             <div
               key={l.variable}
-              className={`catalog__item${variable === l.variable ? " is-active" : ""}`}
+              className={`catalog__item${variable === l.variable ? " is-shown" : selectedVariables.has(l.variable) ? " is-marked" : ""}`}
             >
               <input
                 type="checkbox"
@@ -461,6 +544,7 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
               >
                 {formatLabel(l.variable)}
               </span>
+              {variable === l.variable && <span className="catalog__onmap">on map</span>}
             </div>
           ))}
         </Step>
@@ -469,12 +553,19 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
           <Step
             n={3}
             title={entityKind === "fleet" ? "Fleet" : "Group"}
-            hint={visibleSelectedEntities.length > 0 ? `${visibleSelectedEntities.length} selected` : undefined}
+            tag={forVariable}
+            hint={
+              visibleSelectedEntities.length === 1
+                ? "1 map"
+                : visibleSelectedEntities.length > 1
+                  ? `${visibleSelectedEntities.length} maps`
+                  : undefined
+            }
             open={isStepOpen("entity")}
             onToggle={() => toggleStep("entity")}
           >
             {entityNames.map((n) => (
-              <div key={n} className={`catalog__item${entity === n ? " is-active" : ""}`}>
+              <div key={n} className={`catalog__item${selectedEntities.has(n) ? " is-marked" : ""}`}>
                 <input
                   type="checkbox"
                   className="catalog__check"
@@ -483,8 +574,8 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
                 />
                 <span
                   className="catalog__item-label catalog__item-label--btn"
-                  onClick={() => focusEntity(n)}
-                  title={`Show this ${entityKind ?? "entity"} on the map`}
+                  onClick={() => toggleEntitySelected(n)}
+                  title={`Show or hide a map of this ${entityKind ?? "entity"}`}
                 >
                   {n}
                 </span>
@@ -497,6 +588,7 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
           <Step
             n={hasEntity ? 4 : 3}
             title="Year"
+            tag={forVariable}
             hint={String(year)}
             open={isStepOpen("year")}
             onToggle={() => toggleStep("year")}
@@ -528,7 +620,7 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
                   onChange={(e) => {
                     const v = Number(e.target.value);
                     if (Number.isNaN(v)) return;
-                    setCustomYearMin(Math.min(Math.max(v, activeLayer.year_min), yearHi));
+                    updateSettings({ yearMin: Math.min(Math.max(v, activeLayer.year_min), yearHi) });
                   }}
                 />
                 <span className="muted">–</span>
@@ -541,18 +633,17 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
                   onChange={(e) => {
                     const v = Number(e.target.value);
                     if (Number.isNaN(v)) return;
-                    setCustomYearMax(Math.max(Math.min(v, activeLayer.year_max), yearLo));
+                    updateSettings({ yearMax: Math.max(Math.min(v, activeLayer.year_max), yearLo) });
                   }}
                 />
                 <span className="muted">
                   (available: {activeLayer.year_min}–{activeLayer.year_max})
                 </span>
-                {(customYearMin != null || customYearMax != null) && (
+                {(settings.yearMin != null || settings.yearMax != null) && (
                   <button
                     className="linkbtn"
                     onClick={() => {
-                      setCustomYearMin(null);
-                      setCustomYearMax(null);
+                      updateSettings({ yearMin: null, yearMax: null });
                     }}
                   >
                     Reset
@@ -565,6 +656,7 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
         <Step
           n={hasEntity ? 5 : 4}
           title="Color scale"
+          tag={forVariable}
           hint={`${PALETTE_OPTIONS.find((p) => p.id === palette)?.label ?? palette}${invert ? " (inverted)" : ""}`}
           open={isStepOpen("color")}
           onToggle={() => toggleStep("color")}
@@ -577,13 +669,13 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
                   className={`swatchbtn${palette === p.id ? " is-active" : ""}`}
                   style={{ background: PALETTE_SWATCH[p.id] }}
                   title={p.label}
-                  onClick={() => setPalette(p.id)}
+                  onClick={() => updateSettings({ palette: p.id })}
                 >
                   <span className="sr-only">{p.label}</span>
                 </button>
               ))}
               <label className="check colorctl__invert">
-                <input type="checkbox" checked={invert} onChange={(e) => setInvert(e.target.checked)} />
+                <input type="checkbox" checked={invert} onChange={(e) => updateSettings({ invert: e.target.checked })} />
                 Invert
               </label>
             </div>
@@ -593,7 +685,7 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
                   type="radio"
                   name="domain-mode"
                   checked={domainMode === "auto"}
-                  onChange={() => setDomainMode("auto")}
+                  onChange={() => updateSettings({ domainMode: "auto" })}
                 />
                 Auto (this map's range)
               </label>
@@ -606,14 +698,14 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
                   <input
                     type="number"
                     value={manualMin}
-                    onChange={(e) => setManualMin(e.target.value)}
+                    onChange={(e) => updateSettings({ manualMin: e.target.value })}
                     placeholder="min"
                   />
                   <span className="muted">–</span>
                   <input
                     type="number"
                     value={manualMax}
-                    onChange={(e) => setManualMax(e.target.value)}
+                    onChange={(e) => updateSettings({ manualMax: e.target.value })}
                     placeholder="max"
                   />
                 </div>
@@ -684,6 +776,25 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
               )}
             </div>
         </Step>
+
+        {scenario && activeLayer && year != null && (
+          <Step
+            n={hasEntity ? 7 : 6}
+            title="Download"
+            hint={selectedAoiIds.length > 0 ? "per area" : "whole area"}
+            open={isStepOpen("export")}
+            onToggle={() => toggleStep("export")}
+            bodyClassName=""
+          >
+            <ExportPanel
+              scenario={scenario}
+              model={activeLayer.model_name ?? activeLayer.model}
+              items={exportItems}
+              labelOf={formatLabel}
+              areas={selectedAois}
+            />
+          </Step>
+        )}
       </aside>
 
       <main className="analysis__main spatialmain">
@@ -693,51 +804,66 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
         {scenario && !variable && <div className="muted pad">Pick a variable (step 2) to see a map.</div>}
         {scenario && variable && (
           <>
-            {(selectedVariables.size > 1 || visibleSelectedEntities.length > 1) && (
-              <div className="viewswitch">
-                {selectedVariables.size > 1 && (
-                  <div className="viewswitch__row">
-                    <span className="viewswitch__label muted">Variable:</span>
-                    {[...selectedVariables].map((v) => (
-                      <button
-                        key={v}
-                        className={`viewswitch__pill${variable === v ? " is-active" : ""}`}
-                        onClick={() => focusVariable(v)}
-                      >
-                        {formatLabel(v)}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {visibleSelectedEntities.length > 1 && (
-                  <div className="viewswitch__row">
-                    <span className="viewswitch__label muted">
-                      {entityKind === "fleet" ? "Fleet" : "Group"}:
-                    </span>
-                    {visibleSelectedEntities.map((n) => (
-                      <button
-                        key={n}
-                        className={`viewswitch__pill${entity === n ? " is-active" : ""}`}
-                        onClick={() => focusEntity(n)}
-                      >
-                        {n}
-                      </button>
-                    ))}
-                  </div>
-                )}
+            {/* What's on the map: one tab per checked variable (the shown one
+                filled), or just its name when only one is checked. */}
+            <div className="vartabs" role="tablist" aria-label="Variable shown on the map">
+              <span className="vartabs__label">Showing</span>
+              {(selectedVariables.size > 0 ? [...selectedVariables] : [variable]).map((v) => (
+                <button
+                  key={v}
+                  role="tab"
+                  aria-selected={variable === v}
+                  className={`vartabs__tab${variable === v ? " is-active" : ""}`}
+                  onClick={() => focusVariable(v)}
+                >
+                  {formatLabel(v)}
+                </button>
+              ))}
+            </div>
+            {rasters.error && (
+              <div className="error pad">
+                Could not load the maps of {formatLabel(variable)}: {rasters.error}{" "}
+                <button className="linkbtn" onClick={() => setRastersRetry((t) => t + 1)}>
+                  Retry
+                </button>
               </div>
             )}
-            <RasterMap
-              rasterUrl={rasterUrl}
-              prefetchUrl={prefetchUrl}
-              onStats={setStats}
-              selectedAois={selectedAois}
-              onAoiDrawn={handleAoiDrawn}
-              palette={palette}
-              invert={invert}
-              domainOverride={domainOverride}
-            />
-            <RasterLegend stats={stats} unitLabel={formatLabel(variable)} palette={palette} invert={invert} />
+            {!rasters.error && hasEntity && mapPanels.length === 0 && entityNames.length > 0 && (
+              <div className="muted pad">
+                Pick a {entityKind === "fleet" ? "fleet" : "group"} (step 3) to see a map.
+              </div>
+            )}
+            {mapPanels.length > 0 && (
+              <div className={`mapgrid mapgrid--${Math.min(mapPanels.length, 3)}`}>
+                {mapPanels.map((p) => (
+                  <div className="mapgrid__panel" key={p.key}>
+                    <div className="mapgrid__title">
+                      <span className="mapgrid__var">{formatLabel(variable)}</span>
+                      {p.title && <span>{p.title}</span>}
+                    </div>
+                    <RasterMap
+                      rasterUrl={p.rasterUrl}
+                      prefetchUrl={p.prefetchUrl}
+                      onStats={statsSetterFor(p.key)}
+                      selectedAois={selectedAois}
+                      onAoiDrawn={handleAoiDrawn}
+                      palette={palette}
+                      invert={invert}
+                      domainOverride={domainOverride}
+                      reloadToken={crsReloadToken}
+                      onCrsFixed={() => setCrsReloadToken((t) => t + 1)}
+                      viewSync={viewSync}
+                    />
+                    <RasterLegend
+                      stats={statsByMap[p.key] ?? null}
+                      unitLabel={formatLabel(variable)}
+                      palette={palette}
+                      invert={invert}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
       </main>

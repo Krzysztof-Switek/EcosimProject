@@ -6,6 +6,7 @@
   --muted: #7b8794;
   --accent: #4e79a7;
   --accent-soft: #eaf1f8;
+  --accent-contrast: #ffffff; /* text on a solid --accent background */
   --danger: #c0392b;
   --warn: #9a6700;
   font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -19,6 +20,7 @@
   --muted: #97a1ac;
   --accent: #6ea8d8;
   --accent-soft: #2a3744;
+  --accent-contrast: #0f1a24;
   --danger: #e06c5e;
   --warn: #e3b341;
 }
@@ -74,8 +76,15 @@ body { margin: 0; background: var(--bg); color: var(--text); }
   width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0;
   background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
 }
-.step__title { flex: 1; }
-.step__hint { font-weight: 400; font-size: 11px; }
+.step__title { flex: 1 1 auto; display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+/* Which variable a step's settings belong to (spatial steps 3-5). */
+.step__tag {
+  background: var(--accent); color: var(--accent-contrast); border-radius: 10px;
+  padding: 1px 8px; font-size: 11px; font-weight: 700;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+/* Shrinks first when the header is tight (the step tag and title keep their room). */
+.step__hint { font-weight: 400; font-size: 11px; min-width: 0; flex-shrink: 100; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .step__head .catalog__chevron { color: var(--muted); }
 .step__head--static .catalog__filter { width: 110px; margin: 0; }
 .step__body { padding: 4px 8px 10px; }
@@ -168,6 +177,19 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .badge--btn { border: none; cursor: pointer; font-family: inherit; flex-shrink: 0; }
 .badge--btn:hover { filter: brightness(0.97); text-decoration: underline; }
 .catalog__item.is-focused { box-shadow: inset 2px 0 0 var(--accent); }
+/* Checked (marked) entries: a clear side bar, not just a faint tint. */
+.catalog__item.is-marked {
+  background: var(--accent-soft); color: var(--accent); font-weight: 600;
+  box-shadow: inset 4px 0 0 var(--accent);
+}
+/* The variable on the map: solid, unmistakable. */
+.catalog__item.is-shown { background: var(--accent); color: var(--accent-contrast); font-weight: 700; }
+.catalog__item.is-shown:hover { background: var(--accent); filter: brightness(1.06); }
+.catalog__item.is-shown .catalog__check { accent-color: var(--accent-contrast); }
+.catalog__onmap {
+  flex-shrink: 0; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  border: 1px solid currentColor; border-radius: 8px; padding: 1px 6px; opacity: .9;
+}
 
 /* docked per-variable model/scenario picker (top of controls column) */
 .seriespicker { display: flex; flex-direction: column; }
@@ -344,18 +366,40 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 
 /* spatial map */
 .spatialmain { display: flex; flex-direction: column; height: 100%; gap: 10px; padding: 0; }
-.viewswitch {
-  display: flex; flex-direction: column; gap: 6px; flex-shrink: 0;
-  padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel);
+/* Variable tabs above the maps: which variable is on screen. */
+.vartabs {
+  display: flex; align-items: flex-end; gap: 4px; flex-wrap: wrap; flex-shrink: 0;
+  border-bottom: 2px solid var(--accent); padding: 0 4px;
 }
-.viewswitch__row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.viewswitch__label { font-size: 11px; flex-shrink: 0; }
-.viewswitch__pill {
-  border: 1px solid var(--border); background: transparent; color: var(--text);
-  padding: 3px 10px; border-radius: 14px; font-size: 12px; cursor: pointer; font-family: inherit;
+.vartabs__label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); padding: 0 8px 8px 0;
 }
-.viewswitch__pill:hover { background: var(--bg); }
-.viewswitch__pill.is-active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+.vartabs__tab {
+  border: 1px solid var(--border); border-bottom: none; border-radius: 8px 8px 0 0;
+  background: var(--panel); color: var(--text); font-family: inherit;
+  font-size: 14px; font-weight: 600; padding: 7px 16px; cursor: pointer;
+}
+.vartabs__tab:hover { background: var(--accent-soft); color: var(--accent); }
+.vartabs__tab.is-active {
+  background: var(--accent); border-color: var(--accent); color: var(--accent-contrast);
+  font-size: 15px; font-weight: 700; padding: 9px 20px; cursor: default;
+}
+/* one map per checked group/fleet: 1, 2 or 3 per row; scrolls past what fits */
+.mapgrid {
+  flex: 1; min-height: 0; overflow: auto;
+  display: grid; gap: 10px; grid-auto-rows: minmax(320px, 1fr);
+}
+.mapgrid--1 { grid-template-columns: 1fr; }
+.mapgrid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.mapgrid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 900px) { .mapgrid--2, .mapgrid--3 { grid-template-columns: 1fr; } }
+.mapgrid__panel { display: flex; flex-direction: column; gap: 6px; min-height: 0; min-width: 0; }
+.mapgrid__title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 700; flex-shrink: 0; }
+.mapgrid__var {
+  background: var(--accent-soft); color: var(--accent); border-radius: 6px;
+  padding: 1px 8px; font-size: 12px; font-weight: 700;
+}
 .rastermap {
   position: relative; flex: 1; min-height: 0;
   border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
@@ -560,3 +604,9 @@ body { margin: 0; background: var(--bg); color: var(--text); }
   border-top: 1px solid var(--border); background: var(--bg);
 }
 .datasource__confirmbar .datasource__nameinput { flex: 1; }
+
+/* spatial download step (ExportPanel) */
+.exportctl { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.exportctl__formats { display: flex; flex-direction: column; gap: 4px; }
+.exportctl__summary, .exportctl__note { line-height: 1.45; }
+.exportctl__actions { display: flex; align-items: center; gap: 10px; }

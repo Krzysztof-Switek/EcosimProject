@@ -16,8 +16,23 @@ import type {
 
 const BASE = "/api";
 
+/** A GET, retried once if the connection drops or the dev proxy reports it
+ * couldn't reach the API (500/502/503/504) -- a dropped response otherwise
+ * leaves a view silently empty (see vite.config.ts), and a GET is safe to
+ * send twice. */
+export async function fetchGet(url: string): Promise<Response> {
+  try {
+    const res = await fetch(url);
+    if (![500, 502, 503, 504].includes(res.status)) return res;
+  } catch {
+    // network error (e.g. ERR_CONNECTION_RESET) -- retry below
+  }
+  await new Promise((r) => setTimeout(r, 300));
+  return fetch(url);
+}
+
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await fetchGet(`${BASE}${path}`);
   if (!res.ok) {
     throw new Error(`${res.status} ${res.statusText} — ${path}`);
   }
@@ -199,6 +214,26 @@ export const api = {
   },
 
   spatialRasterUrl: (id: string) => `${BASE}/spatial/raster/${encodeURIComponent(id)}`,
+
+  /** The selected maps as ESRI ASCII grids, zipped (see backend export/spatial_ascii.py). */
+  exportSpatialAscii: async (body: {
+    scenario: string;
+    /** Each variable with its own groups/fleets and year range. */
+    items: { variable: string; entities: string[]; year_from: number; year_to: number }[];
+    areas: { name: string; geojson: GeoJSON.FeatureCollection }[];
+  }): Promise<{ blob: Blob; filename: string }> => {
+    const res = await fetch(`${BASE}/spatial/export/ascii`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null);
+      throw new Error(typeof detail?.detail === "string" ? detail.detail : `${res.status} ${res.statusText}`);
+    }
+    const match = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "");
+    return { blob: await res.blob(), filename: match?.[1] ?? "ecosim_ascii.zip" };
+  },
 
   /** All registered analyses, or (with `variableNames`) only ones compatible
    * with that selection -- e.g. what's currently picked in a basket. */
