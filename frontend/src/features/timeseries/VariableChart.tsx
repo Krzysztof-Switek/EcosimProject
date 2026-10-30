@@ -1,8 +1,9 @@
+import { useState } from "react";
 import { api } from "../../api/client";
 import { useAsync } from "../../api/useAsync";
 import type { VariableEntry } from "../../api/types";
 import { ComparisonChart } from "./ComparisonChart";
-import { buildChartModel } from "./transform";
+import { buildChartModel, type BaselineMode } from "./transform";
 
 export interface Range {
   year_from?: number;
@@ -64,6 +65,11 @@ export function VariableChart({
   );
 
   const rows = data?.rows ?? [];
+  // Biomass rows carry their group's Ecopath B (backend catalog/service.py) --
+  // offered only when it is known for the plotted groups.
+  const [baselineMode, setBaselineMode] = useState<BaselineMode>("off");
+  const hasBaseline = rows.some((r) => r.baseline != null);
+  const mode: BaselineMode = hasBaseline ? baselineMode : "off";
 
   return (
     <div className="vchart">
@@ -72,6 +78,16 @@ export function VariableChart({
         <span className="vchart__meta muted">
           {variable} · {rows.length} pts
         </span>
+        {hasBaseline && (
+          <label className="vchart__baseline" title="Ecopath biomass B of each group -- the state Ecosim starts from">
+            Ecopath baseline
+            <select value={baselineMode} onChange={(e) => setBaselineMode(e.target.value as BaselineMode)}>
+              <option value="off">Off</option>
+              <option value="line">Line (B0)</option>
+              <option value="relative">Relative (B / B0)</option>
+            </select>
+          </label>
+        )}
         <button className="vchart__remove" title="Remove" onClick={onRemove}>
           ✕
         </button>
@@ -88,9 +104,10 @@ export function VariableChart({
       )}
       {!error && !loading && ready && rows.length > 0 && (
         <ComparisonChart
-          model={buildChartModel(rows, scenarioLabel)}
-          yLabel={entry.label ?? variable}
+          model={buildChartModel(rows, scenarioLabel, mode)}
+          yLabel={mode === "relative" ? `${entry.label ?? variable} / Ecopath B0` : entry.label ?? variable}
           height={260}
+          referenceY={mode === "relative" ? { y: 1, label: "Ecopath state" } : undefined}
         />
       )}
     </div>

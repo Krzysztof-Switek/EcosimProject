@@ -191,6 +191,13 @@ Diagram) — też brak narzędzi eksportu.
 plików/folderów per "przebieg" Ecopath, co ma sens: to model bez wymiaru czasu/przebiegu,
 nie ma czego tak nazywać.
 
+**✏️ Korekta (29.10): wyniki Ecopath jednak trafiają do plików.** Prawdziwy eksport EwE 6.7
+(`RU_SSP1/Sample_00001/`) zawiera pliki CSV samego Ecopath: `basic_estimates.csv` (B, P/B,
+Q/B, EE… per grupa), `ecopath_stats.csv` (wskaźniki całego systemu), `biodiv_ind_Ecopath.csv`
+— z nagłówkiem zawierającym **tylko** blok `<HEADER ecopath/>`. Manual tego nie opisuje (to
+auto-zapis wyników, nie eksport modelu), ale pliki istnieją i są rozpoznawalne — patrz sekcja 7.
+Poniższy wniosek dotyczy więc **modelu** Ecopath (bazy danych), nie jego wyników.
+
 **Konsekwencja dla architektury tego projektu:** w przeciwieństwie do output/input, gdzie
 odkrywanie oparte o treść pliku miało realną podstawę w dokumentacji (nagłówki `<HEADER
 .../>`, `RunInfo.txt`), **tu takiej podstawy nie ma**. Zbudowanie "wskaż folder, appka sama
@@ -554,6 +561,8 @@ skanowany z surowego folderu danych.
 
 | Obszar | Status | Co dokładnie |
 |---|---|---|
+| Wyniki Ecopath w plikach | ✅ Skorygowane 29.10 | Prawdziwy eksport ma CSV Ecopath (`basic_estimates.csv`, `ecopath_stats.csv`, `biodiv_ind_Ecopath.csv`) z samym blokiem `<HEADER ecopath/>`; rozpoznawane przez `model_origin.py` (sekcja 7) |
+| Pochodzenie pliku (Ecopath/Ecosim/Ecospace) | ✅ Zweryfikowane 29.10 | Najgłębszy blok `<HEADER …/>` w nagłówku pliku; wejścia wg PM s.127/270 i UG s.80–81, 174, 226, 240 (sekcja 7) |
 | Czy dane Ecopath mają eksportowalną-do-folderu konwencję (jak output/input) | ℹ️ Zweryfikowane 28.08 — nie mają | Jedyny udokumentowany eksport to całego modelu przez Ecobase (UG s.6); "Ecopath Output" (s.26-42) to wyłącznie formularze w aplikacji, nie pliki. Brak odpowiednika `<HEADER ecosim/>`/`RunInfo.txt`. Wniosek: folder-discovery tile jak dla output/input nie ma podstawy w dokumentacji — inny kształt wsparcia potrzebny, jeśli w ogóle |
 | Format `.asc` (nagłówek, orientacja) | ✅ Zgodne | Standardowy ESRI ASCII Grid, orientacja NW→SE, potwierdzone na realnym pliku |
 | Konwencja nazw plików z krokiem czasowym | ✅ Zgodne | To natywna konwencja EwE, nie nasze obejście |
@@ -583,3 +592,73 @@ pliku na angielski (26.08, sekcja o regule języka UI). Przykładowy `manifest.j
 samym dokumencie też nie pokazuje kształtu `{variable, domain, scenarios}` per zmienna,
 który realnie obsługuje `runner.py` od wczoraj. Drobny dryf dokumentacji względem kodu,
 niezwiązany z EwE — osobna, szybka poprawka, jeśli będzie potrzebna.
+
+---
+
+## 7. Rozpoznawanie modelu źródłowego (Ecopath / Ecosim / Ecospace) — zweryfikowane 29.10
+
+Ekran startowy pokazuje, z którego modelu EwE pochodzą wczytane dane, bo od tego zależą
+dalsze analizy. Kod: `backend/ecosim/ingestion/model_origin.py`, testy:
+`backend/tests/test_model_origin.py`. **Numery stron poniżej to numery stron PDF** (nie
+drukowane w stopce).
+
+### Wyniki (output) — zagnieżdżone bloki nagłówka
+
+Sprawdzone na prawdziwych plikach EwE 6.7.0 (`RU_SSP1/Sample_00001/`). Każdy plik zaczyna się
+od bloków `"<HEADER x/>"`, wymieniających warstwy modelu, które go wyprodukowały. Najgłębszy
+blok to pochodzenie pliku:
+
+| Bloki nagłówka | Pochodzenie | Przykładowe pliki |
+|---|---|---|
+| `software`, `ecopath` | Ecopath | `basic_estimates.csv`, `ecopath_stats.csv`, `biodiv_ind_Ecopath.csv` |
+| … + `ecosim` (`EcosimScenario`, `TimeSeries`, `StartYear`) | Ecosim | `catch_annual.csv`, `biodiv_ind_Ecosim.csv` |
+| … + `ecospace` (`EcospaceScenario`, `MapRows`, `MapCols`, `MapCellSize`) | Ecospace | `csv/EcospaceMapBiomass-<grupa>.csv`, `asc/Ecospace RunInfo.txt` |
+
+`ModelSource` w bloku `ecopath` podaje plik modelu, z którego liczono (u nas `.eweaccdb`).
+Mapy `.asc` nie mają nagłówka EwE; w folderze wyników to mapy wyjściowe Ecospace (UG s.65:
+„Ecospace is set to autosave ASCII output maps”). Pliki tylko w chmurze nie są czytane (odczyt
+pobrałby je), liczone są jako „not checked”. Koszt: czytane jest tylko pierwsze 4 KB plików
+CSV/TXT, cały folder RU_SSP1 (~583 tys. plików) w ok. 25 s, jeden przebieg poniżej 1 s.
+
+### Dane wejściowe (input) — według manuali
+
+- **Model** — jedna baza danych: „The model will be saved as a database with .ewemdb
+  extension” (PM s.127). Prawdziwe nagłówki wyników wskazują też starszą postać `.eweaccdb`
+  (`ModelSource`). Baza zawiera model Ecopath razem ze scenariuszami Ecosim i Ecospace.
+- **Szeregi czasowe Ecosim** (do dopasowania i wymuszania) — CSV: pierwszy wiersz `Title`,
+  opcjonalnie `Weight`, potem `Pool code` (i `Pool code 2`), `Type`, dalej wiersz na rok (PM
+  s.270: „The first row gives titles of the time series, the second row is optional and gives
+  weights…”). Kody typów (UG s.80–81): m.in. `BiomassRel` 0, `BiomassAbs` 1, `BiomassForcing`
+  −1, `TimeForcing` 2, `FishingEffort` 3, `FishingMortality` 4, `Catches` 6, `Landings` 12,
+  `Discards` 13; zamiast liczby można użyć skrótu. Kolumny odwołują się do numerów grup i flot
+  (patrz sekcja 5).
+- **Warstwy wejściowe Ecospace** — rastry ESRI ASCII `.asc` (UG s.174: „must be provided as
+  ESRI ASCII raster maps”), przy imporcie warstw także `.csv` i `.shp` (UG s.226, 240).
+- **`trend_*.csv`** — serie sterujące, które aplikacja już wczytuje; ich pochodzenie w EwE nie
+  jest opisane w manualach, więc nie są przypisane do żadnego modelu.
+
+Na razie dane wejściowe są tylko **rozpoznawane i pokazywane** (decyzja użytkownika 29.10);
+wczytywanie modelu i szeregów czasowych do analiz — osobny krok, po weryfikacji na
+prawdziwych plikach wejściowych.
+
+### Wyniki Ecopath jako dane odniesienia dla Ecosim — nazwy grup i linia bazowa (29.10)
+
+Wyniki Ecopath nie są osobną serią ani warstwą mapy (to jedna wartość na grupę, bez czasu),
+ale dwie rzeczy z `basic_estimates.csv` (`GroupNo,Group,B,PB,QB,EE,…`) są używane jako
+odniesienie dla wyników Ecosim tego samego modelu (klucz: `ModelName` z nagłówka, bo
+numeracja grup jest osobna dla każdego modelu, PM s.270):
+
+- **Nazwy grup.** Większość wyników Ecosim ma same numery grup; nazwy z kolumny `Group`
+  trafiają do listy grup, wykresów i danych dla R. Zebrane ze wszystkich zarejestrowanych
+  źródeł wyników, więc przebieg bez własnych plików Ecopath dostaje je z innego źródła tego
+  samego modelu. Sprzeczne nazwy dla tego samego modelu → brak nazw (zostają numery).
+- **Linia bazowa B₀.** Kolumna `B` to biomasa Ecopath, od której startuje Ecosim („key initial
+  parameters inherited from the base Ecopath model”, PM s.122). Zweryfikowane: pierwszy rok
+  Ecosim jest jej równy (AdCod_3: 0,3299918 wobec B = 0,33), więc jednostki są te same.
+  Dotyczy tylko zmiennej `biomass`. Wykres biomasy ma przełącznik: linia B₀ albo B/B₀
+  (1 = stan Ecopath). Różne B w plikach tego samego modelu (np. próbki Monte Carlo losujące B
+  od nowa) → brak linii bazowej, bo nie wiadomo, który przebieg obowiązuje.
+
+Kod: `ingestion/model_origin.py` (zbieranie, `IDENTIFY_VERSION` = 3), `catalog/service.py`
+(`ecopath_group_names`, `ecopath_baseline_biomass`, kolumna `baseline` w wierszach szeregów
+czasowych). Testy: `test_model_origin.py`, `test_dimension_selection.py`.

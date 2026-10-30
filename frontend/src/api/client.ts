@@ -168,6 +168,8 @@ export const api = {
   cancelActivation: (id: string) =>
     postJson<{ status: string; source_id: string }>(`/admin/sources/${encodeURIComponent(id)}/activation-cancel`),
   // The CRS a source's maps are really in (null = as EwE declares) -- see MapCrsMismatch.
+  /** Identify which EwE models a source's files come from (reads file headers only). */
+  identifySource: (id: string) => postJson<DataSource>(`/admin/sources/${encodeURIComponent(id)}/identify`),
   setMapCrs: (id: string, mapCrs: string | null) =>
     putJson<DataSource>(`/admin/sources/${encodeURIComponent(id)}/map-crs`, { map_crs: mapCrs }),
   removeSource: (id: string) => deleteJson<{ status: string }>(`/admin/sources/${encodeURIComponent(id)}`),

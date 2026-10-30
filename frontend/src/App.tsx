@@ -349,6 +349,8 @@ export default function App() {
           onSelect={setModule}
           onOpenSource={setSourcePanelKind}
           activeOutput={activeOutput}
+          activeInput={activeInput}
+          onSourcesChanged={() => setSourceToken((t) => t + 1)}
           outputCount={(sources.data ?? []).filter((s) => s.kind === "output").length}
           inputCount={(sources.data ?? []).filter((s) => s.kind === "input").length}
           activating={activation.activating}

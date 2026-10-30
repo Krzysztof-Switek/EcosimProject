@@ -10,6 +10,7 @@ from contextlib import contextmanager
 
 from ecosim.core.config import Settings, get_settings
 from ecosim.core.db import connect
+from ecosim.core.workspace import get_workspace_registry
 
 
 @contextmanager
@@ -25,6 +26,58 @@ def _rows(con, sql: str, params: list | None = None) -> list[dict]:
     cur = con.execute(sql, params or [])
     cols = [d[0] for d in cur.description]
     return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def _ecopath_per_model(key: str, conflicts_key: str) -> dict[str, dict[int, object]]:
+    """``{Ecopath model name: {group number: value}}`` merged from every
+    registered output source's Ecopath results (``basic_estimates.csv``,
+    collected by ingestion.model_origin when a source is identified) -- so an
+    Ecosim run whose own folder has no Ecopath output gets it from any source
+    holding the same model's. A model whose sources disagree gets nothing."""
+    merged: dict[str, dict[int, object]] = {}
+    conflicts: set[str] = set()
+    for source in get_workspace_registry().list_sources("output"):
+        ecopath = (source.models or {}).get("ecopath") or {}
+        conflicts.update(ecopath.get(conflicts_key, []))
+        for model, values in (ecopath.get(key) or {}).items():
+            known = merged.setdefault(model, {})
+            for gid, value in values.items():
+                if known.get(int(gid), value) != value:
+                    conflicts.add(model)
+                known[int(gid)] = value
+    return {m: v for m, v in merged.items() if m not in conflicts}
+
+
+def ecopath_group_names() -> dict[str, dict[int, str]]:
+    """Group names per Ecopath model (see ``_ecopath_per_model``)."""
+    return _ecopath_per_model("groups", "group_conflicts")  # type: ignore[return-value]
+
+
+def ecopath_baseline_biomass() -> dict[str, dict[int, float]]:
+    """Ecopath biomass B per group per model -- the baseline Ecosim starts
+    from (see ``_ecopath_per_model``)."""
+    return _ecopath_per_model("baseline_biomass", "baseline_conflicts")  # type: ignore[return-value]
+
+
+# Ecosim variables measured in the same units as Ecopath's B (t/km^2) -- the
+# only ones an Ecopath baseline applies to.
+_BASELINE_VARIABLES = {"biomass"}
+
+
+def _annotate_from_ecopath(rows: list[dict]) -> list[dict]:
+    """Name the groups EwE wrote only as numbers, and give biomass rows their
+    group's Ecopath ``baseline`` (None where unknown)."""
+    if not rows:
+        return rows
+    names = ecopath_group_names() if any(r.get("group_name") is None for r in rows) else {}
+    baseline = ecopath_baseline_biomass() if rows[0].get("variable") in _BASELINE_VARIABLES else {}
+    for r in rows:
+        gid = r.get("group_id")
+        model = r.get("model_name")
+        if r.get("group_name") is None and gid is not None:
+            r["group_name"] = names.get(model, {}).get(int(gid))
+        r["baseline"] = baseline.get(model, {}).get(int(gid)) if gid is not None else None
+    return rows
 
 
 def list_scenarios(settings: Settings | None = None) -> list[dict]:
@@ -199,7 +252,7 @@ def query_timeseries(
         " ORDER BY model, scenario, group_id, group_name, fleet_id, fleet_name, partner_name, year, month"
     )
     with _ro(settings) as con:
-        return _rows(con, sql, params)
+        return _annotate_from_ecopath(_rows(con, sql, params))
 
 
 # Dimensions list_dimension can enumerate -> their (id, name) columns. A fixed map,
@@ -220,7 +273,10 @@ def list_dimension(
     per EwE number (``id``) with the variables it occurs in, and its ``name`` only
     where EwE wrote one into the file itself (no id->name dictionary exists; EwE
     numbers groups and fleets per model, in the order the modeller entered them --
-    docs/ewe-data-formats.md, section 5)."""
+    docs/ewe-data-formats.md, section 5). A group with no name in the file gets
+    the one from its model's Ecopath output, if known (``ecopath_group_names``);
+    if the selected scenarios mix models that name a number differently, the
+    names are joined with " / "."""
     id_col, name_col = _DIMENSION_COLUMNS[dimension]
     settings = settings or get_settings()
     clauses = [f"variable IN ({_placeholders(variable)})", "freq = ?", f"{id_col} IS NOT NULL"]
@@ -230,12 +286,20 @@ def list_dimension(
         params += scenario
     sql = (
         f"SELECT {id_col} AS id, any_value({name_col}) AS name, "
-        "list(DISTINCT variable ORDER BY variable) AS variables "
+        "list(DISTINCT variable ORDER BY variable) AS variables, "
+        "list(DISTINCT model_name) AS model_names "
         "FROM timeseries WHERE " + " AND ".join(clauses) +
         f" GROUP BY {id_col} ORDER BY {id_col}"
     )
     with _ro(settings) as con:
-        return _rows(con, sql, params)
+        rows = _rows(con, sql, params)
+    lookup = ecopath_group_names() if dimension == "group" and any(r["name"] is None for r in rows) else {}
+    for r in rows:
+        models = r.pop("model_names") or []
+        if r["name"] is None and lookup:
+            found = sorted({lookup[m][r["id"]] for m in models if m in lookup and r["id"] in lookup[m]})
+            r["name"] = " / ".join(found) or None
+    return rows
 
 
 def list_raster_layers(settings: Settings | None = None) -> list[dict]:

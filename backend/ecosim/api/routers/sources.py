@@ -33,6 +33,7 @@ from ecosim.ingestion.activation import (
     start_rescan,
 )
 from ecosim.ingestion.file_access import can_make_local, cloud_only_message, scan_local_availability
+from ecosim.ingestion.model_origin import identify
 from ecosim.ingestion.pipeline import validate_input_root, validate_output_root
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -62,6 +63,8 @@ class SourceOut(BaseModel):
     scan_warnings: list[str] = []
     # User-set CRS of this source's maps (see DataSource.map_crs); None = as EwE declares.
     map_crs: str | None = None
+    # Which EwE models the files come from (see DataSource.models); None = not identified yet.
+    models: dict | None = None
 
     @classmethod
     def from_source(cls, source: DataSource, *, active: bool) -> "SourceOut":
@@ -81,6 +84,7 @@ class SourceOut(BaseModel):
             cache_size_bytes=dir_size_bytes(source_cache_dir(source.id)),
             scan_warnings=scan_warnings(source.id) if source.status == "ok" else [],
             map_crs=source.map_crs,
+            models=source.models,
         )
 
 
@@ -392,3 +396,21 @@ def browse(path: str | None = None) -> BrowseOut:
     else:
         parent_str = str(parent)
     return BrowseOut(path=str(target), parent=parent_str, entries=entries)
+
+
+@router.post("/sources/{source_id}/identify")
+def identify_source(source_id: str) -> SourceOut:
+    """Work out which EwE models (Ecopath / Ecosim / Ecospace) this source's
+    files come from, without a full rescan -- for sources scanned before this
+    was recorded (every scan does it itself now). Reads only the first few KB
+    of each CSV/TXT file and skips files that are only in the cloud: about
+    25 s for ~580k files, well under a second for one model run."""
+    registry = get_workspace_registry()
+    source = registry.get(source_id)
+    if source is None:
+        raise HTTPException(404, f"Unknown data source: {source_id}")
+    if not source.path.is_dir():
+        raise HTTPException(422, f"The folder is not reachable: {source.path}")
+    registry.set_models(source_id, identify(source.path, source.kind))
+    active = registry.active(source.kind)
+    return SourceOut.from_source(registry.get(source_id), active=active is not None and active.id == source_id)

@@ -44,6 +44,7 @@ from ecosim.ingestion.file_access import (
     sync_client_not_running,
     sync_client_not_running_message,
 )
+from ecosim.ingestion.model_origin import identify
 from ecosim.ingestion.pipeline import IngestCancelled, IngestReport, ProgressFn, run_ingest
 from ecosim.ingestion.spatial_pipeline import SpatialIndexReport, build_raster_index
 
@@ -333,13 +334,19 @@ def _ingest_one_source(
             raise IngestCancelled()
         report = run_ingest(settings, on_progress, cancel_event)
         spatial_report = build_raster_index(settings, on_progress, cancel_event)
+        if on_progress is not None:
+            on_progress("identifying", 0, None)
+        models = identify(source.path, source.kind)
         # Finding literally nothing at all (zero scenarios, zero rasters)
         # means this source's *shape* didn't match anything this pipeline
         # knows how to discover. Catching it here, not just in
         # validate_output_root() (registration-time only, not re-checked on
         # activate/rescan), so a scan never silently "succeeds" over an
         # empty/wrong folder.
-        if not report.scenarios and spatial_report.rasters_indexed == 0:
+        # Model input may hold only things identified but not loaded yet (the
+        # model database, Ecosim time-series CSVs) -- that's a valid source.
+        identified_only = source.kind == "input" and any(k != "not_checked" for k in models)
+        if not report.scenarios and spatial_report.rasters_indexed == 0 and not identified_only:
             raise RuntimeError(
                 " ".join([
                     "No scenario results or spatial maps were found for this source "
@@ -379,7 +386,10 @@ def _ingest_one_source(
         warnings=_scan_warnings(report, spatial_report),
     )
     _write_meta(result, started_at=started_at, finished_at=datetime.now(timezone.utc), duration_seconds=duration)
-    registry.mark_scanned(source.id, ok=True, data_kind=data_kind, run_count=run_count, scan_duration_seconds=duration)
+    registry.mark_scanned(
+        source.id, ok=True, data_kind=data_kind, run_count=run_count,
+        scan_duration_seconds=duration, models=models,
+    )
     return result
 
 

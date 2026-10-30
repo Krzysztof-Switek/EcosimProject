@@ -71,6 +71,8 @@ export interface TimeseriesRow {
   partner_id: number | null;
   partner_name: string | null;
   value: number | null;
+  /** Biomass rows: the group's Ecopath biomass B, the baseline Ecosim starts from (null if unknown). */
+  baseline?: number | null;
 }
 
 /** A functional group or fleet present in the data (GET /catalog/groups, /catalog/fleets).
@@ -190,6 +192,34 @@ export interface DataSource {
   scan_warnings: string[];
   // CRS the user set for this source's maps (e.g. "EPSG:3035"); null = as EwE declares.
   map_crs: string | null;
+  // Which EwE models the files come from; null = not identified yet. See ModelInventory.
+  models: ModelInventory | null;
+}
+
+/** What a source's files were identified as (backend ingestion/model_origin.py).
+ * Output: the EwE model layer each file came from (its "<HEADER .../>" blocks).
+ * Input: the kinds of model input found. A key is absent when nothing of that
+ * kind was found; not_checked counts files only in the cloud (not read). */
+export interface ModelInventory {
+  // groups: {model name: {group number: name}} from Ecopath's basic_estimates.csv.
+  ecopath?: {
+    files: number;
+    models: string[];
+    groups?: Record<string, Record<string, string>>;
+    group_conflicts?: string[];
+    // {model name: {group number: Ecopath B}} -- the biomass Ecosim starts from.
+    baseline_biomass?: Record<string, Record<string, number>>;
+    baseline_conflicts?: string[];
+  };
+  ecosim?: { files: number; models: string[]; scenarios: string[] };
+  ecospace?: { files: number; maps?: number; models: string[]; scenarios: string[] };
+  ecopath_model?: { files: number; names: string[] };
+  ecosim_timeseries?: { files: number; series: number };
+  ecospace_maps?: { files: number; shapefiles: number };
+  driver_trends?: { files: number };
+  not_checked: number;
+  /** Version of the identification that produced this (see IDENTIFY_VERSION, backend model_origin.py). */
+  version?: number;
 }
 
 /** 422 detail from GET /spatial/raster/{id} when a map's coordinates can't be

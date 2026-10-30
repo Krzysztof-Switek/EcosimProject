@@ -261,6 +261,8 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .vchart__head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
 .vchart__title { font-size: 14px; font-weight: 600; }
 .vchart__meta { font-size: 11px; }
+.vchart__baseline { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.vchart__baseline select { font-size: 11px; padding: 1px 4px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
 .vchart__remove { margin-left: auto; border: none; background: transparent; color: var(--muted); cursor: pointer; }
 .vchart__remove:hover { color: var(--danger); }
 
@@ -317,7 +319,21 @@ body { margin: 0; background: var(--bg); color: var(--text); }
   filter: grayscale(0.7); background: var(--bg);
 }
 .landing__tile--upload { width: 180px; padding: 16px 14px; }
-.landing__tiles--single { max-width: 200px; margin: 0 auto; }
+/* Required-data tiles: wider, with the list of identified EwE models. */
+.landing__tile--source { width: 270px; }
+.modellist {
+  display: flex; flex-direction: column; gap: 3px; width: 100%; margin-top: 8px;
+  padding-top: 8px; border-top: 1px solid var(--border); text-align: left; font-size: 12px;
+}
+.modellist__source { font-weight: 700; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modellist__row { display: grid; grid-template-columns: 14px auto 1fr; align-items: baseline; gap: 6px; color: var(--muted); }
+.modellist__row.is-found { color: var(--text); }
+.modellist__mark { font-weight: 700; text-align: center; }
+.modellist__row.is-found .modellist__mark { color: #2f7d5d; }
+.modellist__label { font-weight: 600; white-space: nowrap; }
+.modellist__detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.modellist__note { font-size: 11px; margin-top: 2px; }
+.modellist__pending { font-size: 12px; margin-top: 8px; }
 .landing__tile--stub { cursor: default; opacity: 0.55; }
 .landing__tile--stub:hover { transform: none; border-color: var(--border); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); }
 .landing__icon { font-size: 40px; line-height: 1; margin-bottom: 4px; }

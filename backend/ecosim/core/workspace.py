@@ -96,6 +96,13 @@ class DataSource:
     # trust what EwE declares. Never set implicitly: the data doesn't say which
     # CRS is right, so it's the user's call.
     map_crs: str | None = None
+    # Which EwE models this source's files come from, per
+    # ingestion.model_origin.identify (output: "ecopath"/"ecosim"/"ecospace"
+    # with file counts and model/scenario names; input: "ecopath_model"/
+    # "ecosim_timeseries"/"ecospace_maps"/"driver_trends"). None until
+    # identified -- set by every successful scan, or on its own via
+    # POST /admin/sources/{id}/identify for sources scanned before this existed.
+    models: dict | None = None
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -120,6 +127,7 @@ class DataSource:
             scan_duration_seconds=d.get("scan_duration_seconds"),
             keep_local=d.get("keep_local", False),
             map_crs=d.get("map_crs"),
+            models=d.get("models"),
         )
 
 
@@ -228,6 +236,14 @@ class WorkspaceRegistry:
         match["map_crs"] = map_crs
         self._write(data)
 
+    def set_models(self, source_id: str, models: dict) -> None:
+        data = self._load()
+        match = next((s for s in data["sources"] if s["id"] == source_id), None)
+        if match is None:
+            raise ValueError(f"Unknown data source: {source_id}")
+        match["models"] = models
+        self._write(data)
+
     def set_active(self, source_id: str) -> None:
         data = self._load()
         match = next((s for s in data["sources"] if s["id"] == source_id), None)
@@ -245,6 +261,7 @@ class WorkspaceRegistry:
         data_kind: str | None = None,
         run_count: int = 1,
         scan_duration_seconds: float | None = None,
+        models: dict | None = None,
     ) -> None:
         data = self._load()
         for s in data["sources"]:
@@ -260,6 +277,7 @@ class WorkspaceRegistry:
                     s["data_kind"] = data_kind
                     s["run_count"] = run_count
                     s["scan_duration_seconds"] = scan_duration_seconds
+                    s["models"] = models
         self._write(data)
 
 

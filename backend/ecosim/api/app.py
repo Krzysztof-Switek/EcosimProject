@@ -8,6 +8,7 @@ this when moving to a shared server.
 from __future__ import annotations
 
 import logging
+import threading
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +46,19 @@ def create_app() -> FastAPI:
             migrate_legacy_store_if_needed(get_workspace_registry())
         except Exception:  # noqa: BLE001 -- best-effort, must never block startup
             logging.getLogger("ecosim.activation").exception("Legacy store migration failed; continuing without it.")
+
+    @app.on_event("startup")
+    def _identify_models() -> None:
+        # Sources identified before identify() learned something new (e.g.
+        # Ecopath group names) are identified again -- in the background,
+        # since a large Monte Carlo folder takes ~25 s (file headers only,
+        # cloud-only files skipped, nothing downloaded).
+        from ecosim.ingestion.model_origin import refresh_identification
+
+        threading.Thread(
+            target=refresh_identification, args=(get_workspace_registry(),), daemon=True,
+            name="identify-models",
+        ).start()
 
     @app.get("/health", tags=["meta"])
     def health() -> dict:

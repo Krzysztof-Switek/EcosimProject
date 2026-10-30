@@ -189,13 +189,15 @@ def validate_input_root(path: Path) -> list[str]:
     """Same idea as ``validate_output_root``, for *Model input data*: a
     genuine existence check, not full discovery -- see that function's
     docstring for why this matters at scale."""
+    from ecosim.ingestion.model_origin import has_recognised_input
     from ecosim.ingestion.spatial_pipeline import _any_input_raster
 
-    if not _any_input_csv(path) and not _any_input_raster(path):
+    if not _any_input_csv(path) and not _any_input_raster(path) and not has_recognised_input(path):
         return [
-            "No driver data was found anywhere under this folder -- expected at "
-            "least one trend_*.csv (e.g. trend_BAU.csv) or a driver .asc grid. "
-            "Check this is really your model's input export."
+            "No model input was found anywhere under this folder -- expected an EwE "
+            "model file (.ewemdb / .eweaccdb), an Ecosim time-series CSV, Ecospace "
+            "input maps (.asc / .shp) or driver trends (trend_*.csv). Check this is "
+            "really your model's input."
         ]
     return []
 

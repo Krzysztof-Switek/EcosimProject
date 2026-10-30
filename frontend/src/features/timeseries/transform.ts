@@ -4,7 +4,14 @@ export interface Series {
   key: string;
   label: string;
   color: string;
+  /** Drawn dashed: a reference (the Ecopath baseline), not model output. */
+  dashed?: boolean;
 }
+
+/** How the Ecopath baseline biomass (B of each group, the state Ecosim starts
+ * from) is shown: not at all, as a dashed line per group, or by dividing each
+ * value by it (B/B0, 1 = the Ecopath state). */
+export type BaselineMode = "off" | "line" | "relative";
 
 export interface ChartModel {
   series: Series[];
@@ -34,6 +41,7 @@ export function dimensionLabel(kind: DimensionKind, id: number | null, name: str
 export function buildChartModel(
   rows: TimeseriesRow[],
   scenarioLabel: (scenario: string) => string = (s) => s,
+  baselineMode: BaselineMode = "off",
 ): ChartModel {
   const xField: "year" | "date" =
     rows.length > 0 && rows[0].freq === "monthly" ? "date" : "year";
@@ -70,18 +78,36 @@ export function buildChartModel(
       bucket = { [xField]: x };
       byX.set(x, bucket);
     }
-    bucket[key] = r.value;
+    bucket[key] =
+      baselineMode === "relative" ? (r.baseline && r.value != null ? r.value / r.baseline : null) : r.value;
   }
 
   const data = [...byX.values()].sort((a, b) =>
     String(a[xField]).localeCompare(String(b[xField]), undefined, { numeric: true }),
   );
 
-  const series = seriesOrder.map((key, i) => ({
+  const series: Series[] = seriesOrder.map((key, i) => ({
     key,
     label: key,
     color: PALETTE[i % PALETTE.length],
   }));
+
+  // One dashed line per group (scenarios of one model share its baseline),
+  // in the colour of the group's first series.
+  if (baselineMode === "line") {
+    const done = new Set<string>();
+    for (const r of rows) {
+      if (r.baseline == null) continue;
+      const g = group(r) ?? "";
+      const id = `${r.model_name ?? ""}|${g}`;
+      if (done.has(id)) continue;
+      done.add(id);
+      const key = multiGroup ? `Ecopath B0 · ${g}` : "Ecopath B0";
+      const color = series.find((s) => s.key === seriesKey(r))?.color ?? "#888";
+      for (const bucket of data) bucket[key] = r.baseline;
+      series.push({ key, label: key, color, dashed: true });
+    }
+  }
 
   return { series, data, xField };
 }

@@ -3,6 +3,7 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -15,9 +16,11 @@ interface Props {
   yLabel: string;
   height?: number;
   showLegend?: boolean;
+  /** A horizontal reference line (e.g. y = 1, the Ecopath state, for B/B0). */
+  referenceY?: { y: number; label: string };
 }
 
-export function ComparisonChart({ model, yLabel, height = 420, showLegend = true }: Props) {
+export function ComparisonChart({ model, yLabel, height = 420, showLegend = true, referenceY }: Props) {
   return (
     <ResponsiveContainer width="100%" height={height}>
       <LineChart data={model.data} margin={{ top: 8, right: 24, bottom: 8, left: 8 }}>
@@ -33,6 +36,14 @@ export function ComparisonChart({ model, yLabel, height = 420, showLegend = true
           labelStyle={{ fontWeight: 600 }}
         />
         {showLegend && <Legend wrapperStyle={{ fontSize: 12 }} />}
+        {referenceY && (
+          <ReferenceLine
+            y={referenceY.y}
+            stroke="#888"
+            strokeDasharray="6 4"
+            label={{ value: referenceY.label, position: "insideTopRight", fontSize: 11, fill: "#888" }}
+          />
+        )}
         {model.series.map((s) => (
           <Line
             key={s.key}
@@ -41,7 +52,8 @@ export function ComparisonChart({ model, yLabel, height = 420, showLegend = true
             name={s.label}
             stroke={s.color}
             dot={false}
-            strokeWidth={1.8}
+            strokeWidth={s.dashed ? 1.4 : 1.8}
+            strokeDasharray={s.dashed ? "6 4" : undefined}
             connectNulls
             isAnimationActive={false}
           />

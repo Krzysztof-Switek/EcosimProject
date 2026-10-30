@@ -72,3 +72,44 @@ def test_query_timeseries_filters_by_fleet_and_group_number_together(tmp_path):
         settings, variable="catch_fleet_group", freq="annual", fleet_id=[1, 2], group_id=[2],
     )
     assert sorted((r["fleet_id"], r["group_id"], r["value"]) for r in rows) == [(1, 2, 0.1), (2, 2, 0.3)]
+
+
+def _register_ecopath_names(tmp_path, groups: dict, conflicts: list | None = None, baseline: dict | None = None) -> None:
+    """An output source whose Ecopath results named the groups of "Test Model"."""
+    from ecosim.core.workspace import get_workspace_registry
+
+    folder = tmp_path / "ecopath_run"
+    folder.mkdir()
+    registry = get_workspace_registry()
+    source = registry.add_source("ecopath run", folder, "output")
+    ecopath = {"files": 1, "models": ["Test Model"], "groups": {"Test Model": groups}}
+    if conflicts:
+        ecopath["group_conflicts"] = conflicts
+    if baseline:
+        ecopath["baseline_biomass"] = {"Test Model": baseline}
+    registry.set_models(source.id, {"ecopath": ecopath, "not_checked": 0, "version": 2})
+
+
+def test_group_numbers_get_names_from_the_models_ecopath_output(tmp_path):
+    settings = _ingested(tmp_path)
+    _register_ecopath_names(tmp_path, {"2": "JuvCod", "3": "AdCod_3"})
+    groups = service.list_dimension(settings, dimension="group", variable=["catch"])
+    assert [(g["id"], g["name"]) for g in groups] == [(1, None), (2, "JuvCod"), (3, "AdCod_3")]
+    rows = service.query_timeseries(settings, variable="catch", group_id=[3])
+    assert {r["group_name"] for r in rows} == {"AdCod_3"}
+
+
+def test_names_of_another_model_are_not_used(tmp_path):
+    settings = _ingested(tmp_path)
+    _register_ecopath_names(tmp_path, {"2": "JuvCod"}, conflicts=["Test Model"])
+    groups = service.list_dimension(settings, dimension="group", variable=["catch"])
+    assert all(g["name"] is None for g in groups)
+
+
+def test_biomass_rows_carry_their_groups_ecopath_baseline(tmp_path):
+    settings = _ingested(tmp_path)
+    _register_ecopath_names(tmp_path, {"2": "JuvCod"}, baseline={"2": 1.9, "3": 3.1})
+    rows = service.query_timeseries(settings, variable="biomass", group_id=[2, 4])
+    assert {(r["group_id"], r["baseline"]) for r in rows} == {(2, 1.9), (4, None)}
+    # Only biomass is in Ecopath B's units -- catch gets no baseline.
+    assert all(r["baseline"] is None for r in service.query_timeseries(settings, variable="catch"))

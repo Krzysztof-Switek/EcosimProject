@@ -25,6 +25,7 @@ export const PHASE_LABEL: Record<string, string> = {
   discovering_rasters: "Scanning spatial maps",
   rasters: "Indexing spatial maps",
   catalog: "Building catalog",
+  identifying: "Identifying models (Ecopath / Ecosim / Ecospace)",
   done: "Done",
 };
 
