@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api } from "../../api/client";
 import { useAsync } from "../../api/useAsync";
-import type { VariableEntry } from "../../api/types";
+import type { Picks, VariableEntry } from "../../api/types";
 import { ComparisonChart } from "./ComparisonChart";
 import { buildChartModel, type BaselineMode } from "./transform";
 
@@ -19,16 +19,19 @@ interface Props {
   label: string;
   scenarios: string[];
   scenarioLabel: (scenario: string) => string;
-  groupIds: number[]; // EwE group numbers chosen in step 5
-  fleetIds: number[]; // EwE fleet numbers chosen in step 6
+  /** Its box's selection (step 5); undefined for a box without one. */
+  picks: Picks | undefined;
+  box?: string; // the box's title, for the "pick …" hint
+  /** Monte Carlo: one run; undefined = baseline + the samples' 5–95% band. */
+  run?: string;
   range: Range;
   onRemove: () => void;
 }
 
 /**
  * One comparison chart for a single variable, driven by the shared analysis
- * selection. Group/fleet filters are applied only if the variable has that
- * dimension (so indicators and drivers still render a line per scenario).
+ * selection. Its box's selection filters it only if the box has one (so
+ * indicators and drivers still render a line per scenario).
  */
 export function VariableChart({
   variable,
@@ -37,30 +40,21 @@ export function VariableChart({
   label,
   scenarios,
   scenarioLabel,
-  groupIds,
-  fleetIds,
+  picks,
+  box,
+  run,
   range,
   onRemove,
 }: Props) {
-  const hasGroups = entry.n_groups > 0;
-  const hasFleets = entry.n_fleets > 0;
-  const ready =
-    scenarios.length > 0 && (!hasGroups || groupIds.length > 0) && (!hasFleets || fleetIds.length > 0);
-  const missing = [hasGroups && "groups (step 5)", hasFleets && "fleets (step 6)"].filter(Boolean).join(" and ");
+  const ready = scenarios.length > 0 && (picks === undefined || picks.length > 0);
+  const missing = picks !== undefined && picks.length === 0 ? `its selection in "${box ?? "its box"}" (step 5)` : "";
 
   const { data, loading, error } = useAsync(
     () =>
       ready
-        ? api.timeseries({
-            variable,
-            freq,
-            scenario: scenarios,
-            group_id: hasGroups ? groupIds : undefined,
-            fleet_id: hasFleets ? fleetIds : undefined,
-            ...range,
-          })
+        ? api.timeseries({ variable, freq, scenario: scenarios, picks, run, ...range })
         : Promise.resolve({ count: 0, variable, freq, rows: [] }),
-    [variable, freq, scenarios.join("|"), groupIds.join("|"), fleetIds.join("|"),
+    [variable, freq, scenarios.join("|"), JSON.stringify(picks ?? null), run,
      range.year_from, range.year_to, range.month_from, range.month_to, ready],
   );
 
@@ -77,6 +71,7 @@ export function VariableChart({
         <span className="vchart__title">{label}</span>
         <span className="vchart__meta muted">
           {variable} · {rows.length} pts
+          {rows[0]?.n_samples ? ` · band: 5–95% of ${rows[0].n_samples} samples` : ""}
         </span>
         {hasBaseline && (
           <label className="vchart__baseline" title="Ecopath biomass B of each group -- the state Ecosim starts from">

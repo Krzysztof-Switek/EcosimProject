@@ -1,8 +1,9 @@
 import {
+  Area,
   CartesianGrid,
+  ComposedChart,
   Legend,
   Line,
-  LineChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -23,7 +24,7 @@ interface Props {
 export function ComparisonChart({ model, yLabel, height = 420, showLegend = true, referenceY }: Props) {
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <LineChart data={model.data} margin={{ top: 8, right: 24, bottom: 8, left: 8 }}>
+      <ComposedChart data={model.data} margin={{ top: 8, right: 24, bottom: 8, left: 8 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
         <XAxis dataKey={model.xField} tick={{ fontSize: 12 }} minTickGap={24} />
         <YAxis
@@ -32,7 +33,13 @@ export function ComparisonChart({ model, yLabel, height = 420, showLegend = true
           label={{ value: yLabel, angle: -90, position: "insideLeft", style: { fontSize: 12 } }}
         />
         <Tooltip
-          formatter={(v) => (typeof v === "number" ? v.toPrecision(4) : String(v))}
+          formatter={(v) =>
+            typeof v === "number"
+              ? v.toPrecision(4)
+              : Array.isArray(v)
+                ? v.map((x) => (typeof x === "number" ? x.toPrecision(4) : String(x))).join(" – ")
+                : String(v)
+          }
           labelStyle={{ fontWeight: 600 }}
         />
         {showLegend && <Legend wrapperStyle={{ fontSize: 12 }} />}
@@ -44,6 +51,23 @@ export function ComparisonChart({ model, yLabel, height = 420, showLegend = true
             label={{ value: referenceY.label, position: "insideTopRight", fontSize: 11, fill: "#888" }}
           />
         )}
+        {/* Monte Carlo: the samples' 5–95th percentile, shaded behind its line. */}
+        {model.series
+          .filter((s) => s.band)
+          .map((s) => (
+            <Area
+              key={s.band}
+              type="monotone"
+              dataKey={s.band!}
+              name={`${s.label} · 5–95% of samples`}
+              stroke="none"
+              fill={s.color}
+              fillOpacity={0.18}
+              legendType="none"
+              connectNulls
+              isAnimationActive={false}
+            />
+          ))}
         {model.series.map((s) => (
           <Line
             key={s.key}
@@ -58,7 +82,7 @@ export function ComparisonChart({ model, yLabel, height = 420, showLegend = true
             isAnimationActive={false}
           />
         ))}
-      </LineChart>
+      </ComposedChart>
     </ResponsiveContainer>
   );
 }

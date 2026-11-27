@@ -3,7 +3,7 @@ import { api, type ActivationStatus } from "../../api/client";
 import type { DataSource, DataSourceKind, ModelInventory } from "../../api/types";
 import { activationLabel, type ActivatingSource } from "../datasource/useActivationTracker";
 
-type Module = "spatial" | "timeseries" | "montecarlo";
+type Module = "spatial" | "timeseries";
 
 // Matches IDENTIFY_VERSION in backend ingestion/model_origin.py: a source
 // identified by an older version is identified again (2 = Ecopath group names,
@@ -131,6 +131,7 @@ function SourceTile({
   onClick,
   activating,
   activatingStatus,
+  canManage,
 }: {
   kind: DataSourceKind;
   icon: string;
@@ -149,10 +150,16 @@ function SourceTile({
   onClick: (kind: DataSourceKind) => void;
   activating: ActivatingSource | null;
   activatingStatus: ActivationStatus | null;
+  canManage: boolean;
 }) {
   const isActivatingThis = activating?.kind === kind;
   return (
-    <button className="landing__tile landing__tile--upload landing__tile--source" onClick={() => onClick(kind)}>
+    <button
+      className="landing__tile landing__tile--upload landing__tile--source"
+      onClick={() => onClick(kind)}
+      disabled={!canManage}
+      title={canManage ? undefined : MANAGED_BY_ADMIN}
+    >
       <span className="landing__icon" aria-hidden="true">
         {icon}
         <span className={`landing__icon-arrow landing__icon-arrow--${arrow}`}>{arrow === "down" ? "⬇" : "⬆"}</span>
@@ -217,6 +224,42 @@ function EcopathStubTile() {
   );
 }
 
+const MANAGED_BY_ADMIN = "Only the administrator can change this.";
+
+/** Reference areas (optional): ICES / management region maps on the model's
+ * grid, used by analyses -- see features/regions/ReferenceAreasPanel.tsx. */
+function ReferenceAreasTile({
+  packs,
+  layers,
+  onClick,
+  canManage,
+}: {
+  packs: number;
+  layers: number;
+  onClick: () => void;
+  canManage: boolean;
+}) {
+  return (
+    <button
+      className="landing__tile landing__tile--upload landing__tile--source"
+      onClick={onClick}
+      disabled={!canManage}
+      title={canManage ? undefined : MANAGED_BY_ADMIN}
+    >
+      <span className="landing__icon" aria-hidden="true">🧭</span>
+      <span className="landing__tile-title">Reference areas</span>
+      <span className="landing__tile-desc">ICES and management areas for analyses (optional)</span>
+      {packs > 0 ? (
+        <span className="badge badge--ok landing__tile-badge">
+          ✓ {packs} loaded · {layers} layer{layers === 1 ? "" : "s"}
+        </span>
+      ) : (
+        <span className="badge badge--muted landing__tile-badge">Not set — click to choose</span>
+      )}
+    </button>
+  );
+}
+
 export function Landing({
   onSelect,
   onOpenSource,
@@ -227,6 +270,9 @@ export function Landing({
   inputCount,
   activating,
   activatingStatus,
+  referenceAreas,
+  onOpenReferenceAreas,
+  canManage,
 }: {
   onSelect: (m: Module) => void;
   onOpenSource: (kind: DataSourceKind) => void;
@@ -238,18 +284,35 @@ export function Landing({
   inputCount: number;
   activating: ActivatingSource | null;
   activatingStatus: ActivationStatus | null;
+  referenceAreas: { packs: number; layers: number };
+  onOpenReferenceAreas: () => void;
+  /** Data sources and reference areas can be changed (not a tester's account). */
+  canManage: boolean;
 }) {
   const ready = activeOutput !== null;
   // Gated on what the last scan actually found (data_kind), not just
-  // "is any output active" -- see ingestion.activation._data_kind. A
-  // Monte Carlo dataset should not open the ordinary Spatial/Time series
-  // views (misleading multi-run comparisons rendered as if single-run),
-  // and vice versa the Monte Carlo view has nothing to show without
-  // multi-run data -- see docs/Plans and TO_DO lists/28.08_session_summary.md.
+  // "is any output active" -- see ingestion.activation._data_kind. Monte
+  // Carlo data opens the same two views, marked as such on their tiles: they
+  // tell its runs apart (the baseline run with the samples' 5–95% band, or one
+  // run -- catalog/runs.py), each where the identified models say the data has
+  // Ecospace / Ecosim output.
   const kind = activeOutput?.data_kind ?? null;
-  const spatialReady = ready && (kind === "spatial" || kind === "mixed");
-  const timeseriesReady = ready && (kind === "timeseries" || kind === "mixed");
-  const monteCarloReady = ready && kind === "montecarlo";
+  const models = activeOutput?.models;
+  const monteCarlo = ready && kind === "montecarlo";
+  const spatialReady = ready && (kind === "spatial" || kind === "mixed" || (monteCarlo && !!models?.ecospace));
+  const timeseriesReady =
+    ready && (kind === "timeseries" || kind === "mixed" || (monteCarlo && !!models?.ecosim));
+  const mcBadge = (ok: boolean) =>
+    monteCarlo && ok ? (
+      <span className="badge badge--kind-montecarlo landing__tile-badge">
+        🎲 Monte Carlo · {activeOutput!.run_count} runs
+      </span>
+    ) : null;
+  const mcIcon = monteCarlo ? (
+    <span className="landing__icon-mc" title="Monte Carlo data">
+      🎲
+    </span>
+  ) : null;
 
   // Sources scanned before model identification existed (or identified by an
   // older version of it) have none / less recorded -- identify them now (reads only file headers, skips cloud-only files: under
@@ -259,6 +322,7 @@ export function Landing({
   const tried = useRef(new Set<string>());
   useEffect(() => {
     for (const s of [activeOutput, activeInput]) {
+      if (!canManage) break; // identifying records it on the source -- an administrator's change
       if (!s || s.models?.version === IDENTIFY_VERSION || s.status !== "ok" || tried.current.has(s.id)) continue;
       tried.current.add(s.id);
       setIdentifying((prev) => new Set(prev).add(s.id));
@@ -302,6 +366,7 @@ export function Landing({
             onClick={onOpenSource}
             activating={activating}
             activatingStatus={activatingStatus}
+            canManage={canManage}
           />
           <SourceTile
             kind="input"
@@ -315,6 +380,7 @@ export function Landing({
             onClick={onOpenSource}
             activating={activating}
             activatingStatus={activatingStatus}
+            canManage={canManage}
           />
         </div>
       </div>
@@ -322,6 +388,12 @@ export function Landing({
       <div className="landing__row">
         <span className="landing__row-label">2. Optional data</span>
         <div className="landing__tiles">
+          <ReferenceAreasTile
+            packs={referenceAreas.packs}
+            layers={referenceAreas.layers}
+            onClick={onOpenReferenceAreas}
+            canManage={canManage}
+          />
           <EcopathStubTile />
         </div>
       </div>
@@ -329,37 +401,41 @@ export function Landing({
       <div className="landing__row">
         <span className="landing__row-label">3. Explore</span>
         <div className="landing__tiles">
-          <button className="landing__tile" onClick={() => onSelect("spatial")} disabled={!spatialReady}>
-            <span className="landing__icon" aria-hidden="true">🗺️</span>
+          <button
+            className={`landing__tile${monteCarlo ? " landing__tile--mc" : ""}`}
+            onClick={() => onSelect("spatial")}
+            disabled={!spatialReady}
+          >
+            <span className="landing__icon landing__icon--mc-host" aria-hidden="true">
+              🗺️{mcIcon}
+            </span>
             <span className="landing__tile-title">Spatial data</span>
-            <span className="landing__tile-desc">Ecospace maps (.asc)</span>
+            <span className="landing__tile-desc">
+              {monteCarlo ? "Ecospace maps (.asc) of one run at a time" : "Ecospace maps (.asc)"}
+            </span>
+            {mcBadge(spatialReady)}
             {!spatialReady && (
               <span className="badge badge--muted landing__tile-badge">
                 {!ready ? "🔒 Needs output data" : "🔒 Needs Ecospace output"}
               </span>
             )}
           </button>
-          <button className="landing__tile" onClick={() => onSelect("timeseries")} disabled={!timeseriesReady}>
-            <span className="landing__icon" aria-hidden="true">📈</span>
+          <button
+            className={`landing__tile${monteCarlo ? " landing__tile--mc" : ""}`}
+            onClick={() => onSelect("timeseries")}
+            disabled={!timeseriesReady}
+          >
+            <span className="landing__icon landing__icon--mc-host" aria-hidden="true">
+              📈{mcIcon}
+            </span>
             <span className="landing__tile-title">Time series</span>
-            <span className="landing__tile-desc">Ecosim results (CSV) &amp; drivers</span>
+            <span className="landing__tile-desc">
+              {monteCarlo ? "Baseline run with the samples' 5–95% band" : <>Ecosim results (CSV) &amp; drivers</>}
+            </span>
+            {mcBadge(timeseriesReady)}
             {!timeseriesReady && (
               <span className="badge badge--muted landing__tile-badge">
                 {!ready ? "🔒 Needs output data" : "🔒 Needs Ecosim output"}
-              </span>
-            )}
-          </button>
-          <button className="landing__tile" onClick={() => onSelect("montecarlo")} disabled={!monteCarloReady}>
-            <span className="landing__icon" aria-hidden="true">🎲</span>
-            <span className="landing__tile-title">Monte Carlo</span>
-            <span className="landing__tile-desc">Same scenario across multiple setups</span>
-            {monteCarloReady ? (
-              <span className="badge badge--ok landing__tile-badge">
-                ✓ {activeOutput!.name} ({activeOutput!.run_count} samples)
-              </span>
-            ) : (
-              <span className="badge badge--muted landing__tile-badge">
-                {!ready ? "🔒 Needs output data" : "🔒 Loaded data is not Monte Carlo"}
               </span>
             )}
           </button>

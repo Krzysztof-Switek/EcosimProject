@@ -84,3 +84,39 @@ ecosim_emit_map <- function(src_tif, filename, title = NULL) {
 ecosim_emit_scalar <- function(value, title = NULL, unit = NULL) {
   .append_artifact(list(type = "scalar", value = value, title = title, unit = unit))
 }
+
+# --- obszary i mapy (manifest: spatial + areas) ------------------------------
+# Statystyki obszarów liczy framework (Python) i zapisuje w data/zonal.parquet,
+# więc skrypt R nie musi znać masek ani siatki. Patrz docs/data-contract.md.
+
+#' Statystyki zmiennej Ecospace w obszarach: wiersz = obszar x grupa/flota x rok.
+#' Kolumny: area_id, area_name, area, side (inside/outside), entity, year, mean
+#' (średnia ważona powierzchnią), total (tylko dla gęstości), n_cells, coverage,
+#' dla Monte Carlo (run = "all") mean_p05/mean_p95(/total_p05/total_p95), n_samples.
+ecosim_load_zonal <- function() {
+  path <- file.path(.job_dir(), "data", "zonal.parquet")
+  if (!file.exists(path)) stop("No area statistics in this job -- run the analysis from Spatial data with areas checked.")
+  if (requireNamespace("arrow", quietly = TRUE)) return(as.data.frame(arrow::read_parquet(path)))
+  utils::read.csv(sub("[.]parquet$", ".csv", path), check.names = FALSE)
+}
+
+#' Lista obszarów: id, name, cells, area_km2, mask_file (maska 0/1 GeoTIFF na siatce modelu).
+ecosim_load_areas <- function() {
+  utils::read.csv(file.path(.job_dir(), "data", "areas", "areas.csv"), check.names = FALSE)
+}
+
+#' Kontury obszarów (lon/lat): obiekt sf, jeśli pakiet sf jest zainstalowany, inaczej ścieżka do GeoJSON.
+ecosim_area_outlines <- function() {
+  path <- file.path(.job_dir(), "data", "areas", "areas.geojson")
+  if (requireNamespace("sf", quietly = TRUE)) return(sf::st_read(path, quiet = TRUE))
+  path
+}
+
+#' Maska obszaru jako SpatRaster (wymaga pakietu terra).
+ecosim_area_mask <- function(area_id) {
+  if (!requireNamespace("terra", quietly = TRUE)) stop("Package 'terra' is needed to read area masks.")
+  a <- ecosim_load_areas()
+  f <- a$mask_file[a$id == area_id]
+  if (length(f) != 1) stop("No area with id: ", area_id)
+  terra::rast(file.path(.job_dir(), "data", "areas", f))
+}

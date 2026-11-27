@@ -100,8 +100,9 @@ def test_check_files_are_local_blocks_on_cloud_only_files(tmp_path, readonly_mea
 
 @windows_only
 def test_only_files_the_scan_needs_are_counted(tmp_path, readonly_means_cloud):
-    # The real folder: 33 GB of maps in a format not supported yet -- those
-    # must not count towards "has to be downloaded first".
+    # The real folder: ~40 GB of ECOIND maps, fetched one at a time when shown
+    # (materialize_raster) -- they must not count towards "has to be
+    # downloaded first".
     run = tmp_path / "run"
     _write_csv(run / "biomass_annual.csv")
     for name in ("biodiv_ind_Fish B-0012.asc", "biodiv_ind_Fish B-0012.prj", "notes.docx"):
@@ -153,24 +154,24 @@ def test_unrecognised_asc_files_are_counted_not_silently_dropped(tmp_path):
     raw = tmp_path / "raw" / "SSP1_A002"
     raw.mkdir(parents=True)
     for ts in ("0012", "0024"):
-        (raw / f"biodiv_ind_Commercial B-{ts}.asc").write_text("ncols 1\n")
+        (raw / f"EcospaceMapContaminant-Cod-{ts}.asc").write_text("ncols 1\n")
     settings = Settings(output_raw_dir=tmp_path / "raw", input_raw_dir=None, store_dir=tmp_path / "store")
     report = build_raster_index(settings)
     assert report.rasters_indexed == 0
     assert report.unrecognized_files == 2
-    assert report.unrecognized_examples == ["biodiv_ind_Commercial B-0012.asc", "biodiv_ind_Commercial B-0024.asc"]
+    assert report.unrecognized_examples == ["EcospaceMapContaminant-Cod-0012.asc", "EcospaceMapContaminant-Cod-0024.asc"]
 
 
 def test_scan_warnings_are_recorded_for_unrecognised_maps(tmp_path):
     raw = tmp_path / "raw"
     _write_csv(raw / "run" / "biomass_annual.csv")
-    (raw / "run" / "biodiv_ind_Fish B-0012.asc").write_text("ncols 1\n")
+    (raw / "run" / "EcospaceMapContaminant-Cod-0012.asc").write_text("ncols 1\n")
     registry = WorkspaceRegistry(tmp_path / "config" / "workspaces.json")
     source = registry.add_source("Calib", raw, "output")
     result = activate_source(registry, source)
     assert len(result.warnings) == 1
     assert "1 .asc map file(s) were not loaded" in result.warnings[0]
-    assert "biodiv_ind_Fish B-0012.asc" in result.warnings[0]
+    assert "EcospaceMapContaminant-Cod-0012.asc" in result.warnings[0]
 
 
 @windows_only

@@ -41,12 +41,15 @@ export interface ExportItem {
  */
 export function ExportPanel({
   scenario,
+  run,
   model,
   items,
   labelOf,
   areas,
 }: {
   scenario: string;
+  /** Monte Carlo maps: the run shown, exported alone. */
+  run?: string;
   model: string | null;
   items: ExportItem[];
   labelOf: (variable: string) => string;
@@ -65,7 +68,7 @@ export function ExportPanel({
   useEffect(() => {
     let cancelled = false;
     setRastersByVariable(null);
-    Promise.all(variables.map((v) => api.spatialRasters({ scenario, variable: v })))
+    Promise.all(variables.map((v) => api.spatialRasters({ scenario, variable: v, run })))
       .then((lists) => {
         if (!cancelled) setRastersByVariable(Object.fromEntries(variables.map((v, i) => [v, lists[i]])));
       })
@@ -74,7 +77,7 @@ export function ExportPanel({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scenario, variablesKey]);
+  }, [scenario, run, variablesKey]);
 
   // What will be exported, per variable: the rasters in its year range, of its
   // checked groups/fleets (all of them for a variable without groups/fleets).
@@ -118,6 +121,7 @@ export function ExportPanel({
   const downloadAscii = async () => {
     const { blob, filename } = await api.exportSpatialAscii({
       scenario,
+      run,
       items: items.map((i) => ({
         variable: i.variable, entities: i.entities, year_from: i.yearFrom, year_to: i.yearTo,
       })),

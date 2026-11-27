@@ -92,8 +92,9 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 
 /* step 1–2 pickers */
 .picker { max-height: 200px; overflow: auto; }
-/* steps 5–6 (groups, fleets) share the sidebar with the variable list */
-.picker--compact { max-height: 120px; }
+/* step 5 (a box's selection) in the controls column, one per box -- each list
+   scrolls on its own so several boxes stay in view together */
+.picker--compact { max-height: 40vh; }
 .picker__item {
   display: flex; align-items: center; gap: 8px; padding: 5px 6px;
   font-size: 13px; cursor: pointer; border-radius: 6px;
@@ -176,7 +177,6 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .badge--kind-mixed { background: rgba(180,130,20,0.14); color: #a5780f; }
 .badge--btn { border: none; cursor: pointer; font-family: inherit; flex-shrink: 0; }
 .badge--btn:hover { filter: brightness(0.97); text-decoration: underline; }
-.catalog__item.is-focused { box-shadow: inset 2px 0 0 var(--accent); }
 /* Checked (marked) entries: a clear side bar, not just a faint tint. */
 .catalog__item.is-marked {
   background: var(--accent-soft); color: var(--accent); font-weight: 600;
@@ -191,36 +191,10 @@ body { margin: 0; background: var(--bg); color: var(--text); }
   border: 1px solid currentColor; border-radius: 8px; padding: 1px 6px; opacity: .9;
 }
 
-/* docked per-variable model/scenario picker (top of controls column) */
-.seriespicker { display: flex; flex-direction: column; }
-.seriespicker__var {
-  padding: 6px 10px; font-size: 12px; font-weight: 600; color: var(--accent);
-  border-bottom: 1px solid var(--border);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.seriespicker .multiselect__list { max-height: 260px; padding: 4px 2px; }
-.seriespicker__model {
-  display: flex; align-items: center; gap: 6px; width: 100%;
-  border: none; background: transparent; cursor: pointer; font-family: inherit;
-  padding: 6px 6px; border-radius: 6px; color: var(--text); font-size: 13px; font-weight: 600;
-}
-.seriespicker__model:hover { background: var(--bg); }
-.seriespicker__model .picker__label { text-align: left; }
-.seriespicker__modelbar { display: flex; justify-content: flex-end; padding: 0 8px 2px 24px; }
-.seriespicker__foot {
-  display: flex; justify-content: flex-end;
-  padding: 6px 10px; border-top: 1px solid var(--border);
-}
-
-/* focusable basket chips */
-.chip--btn { cursor: pointer; }
-.chip--btn:hover { filter: brightness(0.97); }
-.chip.is-focused { outline: 2px solid var(--accent); }
-
 /* analysis workspace */
 .analysis { display: flex; height: 100%; }
 .analysis__controls {
-  width: 260px; flex-shrink: 0; padding: 14px; border-right: 1px solid var(--border);
+  width: 300px; flex-shrink: 0; padding: 14px; border-right: 1px solid var(--border);
   background: var(--panel); overflow: auto; display: flex; flex-direction: column; gap: 14px;
 }
 .analysis__main { flex: 1; min-width: 0; padding: 16px 20px; overflow: auto; }
@@ -275,14 +249,6 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 
-/* multiselect (box used by VariableSeriesPicker) */
-.multiselect { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.multiselect__head {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 8px 10px; background: var(--bg); font-size: 13px; font-weight: 600;
-}
-.multiselect__head .muted { font-weight: 400; font-size: 11px; }
-.multiselect__list { max-height: 220px; overflow: auto; }
 
 /* landing (module choice) */
 .landing {
@@ -349,6 +315,13 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .landing__tile--upload .landing__tile-title { font-size: 13px; }
 .landing__tile-desc { font-size: 12px; color: var(--muted); text-align: center; }
 .landing__tile-badge { margin-top: 6px; }
+/* Monte Carlo data: a die on the Spatial / Time series tiles' icons and border. */
+.landing__icon--mc-host { position: relative; display: inline-block; }
+.landing__icon-mc {
+  position: absolute; right: -14px; bottom: -6px; font-size: 20px; line-height: 1;
+  filter: drop-shadow(0 0 2px var(--panel));
+}
+.landing__tile--mc:not(:disabled) { border-color: #8e44ad; }
 
 .landing__tile-progress { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 8px; width: 100%; }
 .landing__tile-progress-track {
@@ -493,6 +466,68 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .aoilist__delete { flex-shrink: 0; color: var(--muted); }
 .aoilist__delete:hover { color: var(--danger); text-decoration: none; }
 .aoilist__clear { align-self: flex-start; font-size: 11px; margin-top: 2px; }
+.aoilist__entry { display: flex; flex-direction: column; }
+.aoilist__meta { display: flex; flex-direction: column; gap: 1px; padding: 0 0 4px 24px; font-size: 11px; }
+.aoilist__problem { color: var(--warn); }
+
+/* Area of interest: saved areas, then "Draw / upload" | "ICES & management areas". */
+.areapicker { display: flex; flex-direction: column; gap: 8px; }
+.areapicker__tabs { display: flex; gap: 14px; border-bottom: 1px solid var(--border); margin-top: 4px; }
+.areapicker__tab {
+  border: none; background: transparent; color: var(--muted); cursor: pointer; font: inherit;
+  font-size: 12px; font-weight: 600; padding: 5px 0; margin-bottom: -1px; border-bottom: 2px solid transparent;
+}
+.areapicker__tab:hover { color: var(--text); }
+.areapicker__tab.is-active { color: var(--text); border-bottom-color: var(--accent); }
+.areapicker__hint { font-size: 11px; }
+.areapicker .aoictl__row { flex-wrap: wrap; }
+.areapicker__notice { font-size: 12px; color: var(--warn); }
+
+.regionbuilder { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.regionbuilder__groups { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.regionbuilder__groupwrap { display: inline-flex; align-items: center; gap: 3px; }
+.regionbuilder__group {
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit; font-size: 12px;
+  border-radius: 6px; padding: 3px 7px; cursor: pointer; max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.regionbuilder__group.is-active { border-color: var(--accent); background: var(--accent-soft); }
+.regionbuilder__and { font-weight: 700; color: var(--muted); padding: 0 2px; }
+.regionbuilder__intersect { font-size: 12px; }
+.regionbuilder__help { margin: 0; font-size: 11px; }
+.regionbuilder__category { display: flex; flex-direction: column; gap: 1px; }
+.regionbuilder__cattitle {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted);
+  margin: 4px 0 2px;
+}
+.regionbuilder__mask { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.regionbuilder__count { margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; }
+.regionbuilder__result {
+  display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px;
+}
+.regionbuilder__name {
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit;
+  padding: 4px 6px; border-radius: 5px;
+}
+.regionbuilder__actions { display: flex; gap: 6px; }
+
+.regionlayer__head {
+  display: flex; align-items: center; gap: 6px; width: 100%; border: none; background: transparent;
+  color: var(--text); font: inherit; font-size: 12px; padding: 3px 0; cursor: pointer; text-align: left;
+}
+.regionlayer__head:hover { color: var(--accent); }
+.regionlayer__caret { width: 10px; color: var(--muted); }
+.regionlayer__body { padding: 2px 0 6px 16px; display: flex; flex-direction: column; gap: 4px; }
+.regionlayer__tools { display: flex; align-items: center; gap: 8px; }
+.regionlayer__search {
+  flex: 1; min-width: 0; border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  font: inherit; font-size: 12px; padding: 3px 6px; border-radius: 5px;
+}
+.regionlayer__list {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 0 8px;
+  max-height: 220px; overflow-y: auto;
+}
+.regionlayer__class { display: flex; align-items: center; gap: 4px; padding: 1px 0; }
 
 .colorctl { display: flex; flex-direction: column; gap: 10px; padding: 4px 8px 10px; }
 .colorctl__row { display: flex; align-items: center; gap: 8px; }
@@ -579,6 +614,13 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .datasource__notice-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .datasource__warnings { margin: 2px 0 0; padding-left: 18px; font-size: 12px; color: var(--warn); }
 .datasource__warnings li { overflow-wrap: anywhere; }
+/* Reference areas panel (features/regions/ReferenceAreasPanel.tsx). Files a
+   pack doesn't use (split parts, a depth grid) are expected, so muted, not --warn. */
+.regionpack__grids { margin: 2px 0 0; padding-left: 18px; font-size: 13px; }
+.regionpack__notes { font-size: 12px; margin-top: 2px; }
+.regionpack__notes summary { cursor: pointer; }
+.regionpack__notes-list { margin: 2px 0 0; padding-left: 18px; color: var(--muted); }
+.regionpack__notes-list li { overflow-wrap: anywhere; }
 .datasource__loaded-actions-row { display: flex; justify-content: flex-end; margin-top: 4px; }
 /* "Use this" sits apart from Rescan/Remove (bigger gap) so it reads as a
    clearly distinct action, not a third peer in the same button group. */
@@ -626,3 +668,80 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .exportctl__formats { display: flex; flex-direction: column; gap: 4px; }
 .exportctl__summary, .exportctl__note { line-height: 1.45; }
 .exportctl__actions { display: flex; align-items: center; gap: 10px; }
+
+/* Time-series step 5: a Results-Extractor box's selection window. */
+.selbox__for {
+  font-size: 11px; padding: 2px 6px 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.selbox__parent.is-open { background: var(--accent-soft); border-radius: 6px; margin: 2px 0; }
+.selbox__expander { cursor: pointer; }
+.selbox__count {
+  flex-shrink: 0; border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+  border-radius: 10px; padding: 1px 7px; font: inherit; font-size: 11px; cursor: pointer;
+}
+.selbox__count.is-on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.selbox__count:hover { filter: brightness(0.97); }
+.selbox__children { padding: 0 0 6px 22px; }
+.selbox__copy { display: block; padding: 4px 6px 0; }
+select.mcrun {
+  width: 100%; padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel); color: var(--text); font: inherit; font-size: 12px;
+}
+.selbox__explain { font-size: 12px; line-height: 1.45; padding: 0 6px; }
+.selbox__note {
+  font-size: 12px; line-height: 1.45; padding: 8px 10px; border-radius: 6px;
+  background: var(--accent-soft); color: var(--accent); font-weight: 600;
+}
+
+/* Time-series "Save results" (the Results Extractor's .CSV + Yearly). */
+.savectl { display: flex; flex-direction: column; gap: 6px; margin-top: 14px;
+  padding-top: 12px; border-top: 1px solid var(--border); }
+.savectl > label:first-child { margin-bottom: 0; }
+.field .savectl__opt { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); margin: 0; }
+.field .savectl__opt input { width: auto; }
+.savectl__opt.is-disabled { color: var(--muted); }
+.savectl__note { font-size: 11px; line-height: 1.45; }
+
+/* Sign-in page (features/auth/AuthGate.tsx). */
+.login { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
+.login__card {
+  width: 320px; display: flex; flex-direction: column; gap: 12px; padding: 28px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+}
+.login__title { margin: 0; font-size: 18px; }
+.login__subtitle { margin: 0 0 4px; font-size: 13px; }
+.login__field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.login__field input {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit;
+  padding: 7px 9px; border-radius: 6px;
+}
+
+/* Area summary below the maps (features/areas/AreaSummaryPanel.tsx). */
+.areasummary { border-top: 1px solid var(--border); padding: 8px 4px 12px; flex-shrink: 0; }
+/* With the summary below, the maps keep a usable height and the view scrolls. */
+.spatialmain:has(.areasummary) { height: auto; min-height: 100%; }
+.spatialmain:has(.areasummary) .mapgrid { flex: 0 0 auto; overflow: visible; grid-auto-rows: minmax(62vh, auto); }
+.areasummary__head { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 13px; }
+.areasummary__toggle {
+  border: none; background: transparent; color: var(--text); font: inherit; font-weight: 700; cursor: pointer; padding: 0;
+}
+.areasummary__runs { display: flex; gap: 12px; margin-left: auto; }
+.areasummary__confirm, .areasummary__progress { padding: 8px 0; font-size: 13px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.areasummary__confirm p { margin: 0; max-width: 760px; }
+.areasummary__bar { width: 320px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.areasummary__bar > div { height: 100%; background: var(--accent); transition: width 0.3s; }
+.areasummary__controls { display: flex; align-items: center; gap: 14px; font-size: 13px; padding: 6px 0; }
+.areasummary__csv { margin-left: auto; }
+.areasummary__notes { display: flex; flex-direction: column; gap: 2px; font-size: 11px; padding-top: 4px; }
+.areasummary__note { font-size: 11px; padding: 2px 0 0 14px; }
+
+/* Time series: "From maps (by area)" (features/areas/MapSeriesSection.tsx). */
+.mapseries { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin: 12px 0; background: var(--panel); }
+.mapseries__hint { font-size: 12px; }
+.mapseries__body { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
+.mapseries__controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; font-size: 13px; }
+.mapseries__controls .field { display: flex; flex-direction: column; gap: 4px; }
+.mapseries__controls .field > span:first-child { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; }
+.mapseries__checks { display: flex; flex-wrap: wrap; gap: 4px 12px; max-width: 640px; max-height: 120px; overflow-y: auto; }
+.mapseries .areasummary { border-top: none; padding-left: 0; }

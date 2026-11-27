@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from ecosim.catalog import service
+from ecosim.catalog.runs import run_label
 from ecosim.core.config import get_settings
 from ecosim.core.workspace import get_workspace_registry
 from ecosim.export.spatial_ascii import ExportArea, name_part, write_ascii_zip
@@ -33,8 +34,9 @@ def rasters(
     group: str | None = None,
     fleet: str | None = None,
     year: int | None = None,
+    run: str | None = None,
 ) -> list[dict]:
-    rows = service.list_rasters(scenario=scenario, variable=variable, group=group, fleet=fleet, year=year)
+    rows = service.list_rasters(scenario=scenario, variable=variable, group=group, fleet=fleet, year=year, run=run)
     # Only what the browser uses: the full rows also carry each map's source
     # path and its run's whole CRS WKT, which made one variable's list ~1.7 MB
     # (Biomass, 21 groups x 95 years) -- slow, and through the dev proxy such
@@ -44,8 +46,14 @@ def rasters(
 
 _RASTER_FIELDS = (
     "id", "model", "model_name", "scenario", "domain", "variable",
-    "group_id", "group_name", "fleet_id", "fleet_name", "year",
+    "group_id", "group_name", "fleet_id", "fleet_name", "year", "run_id",
 )
+
+
+@router.get("/runs")
+def runs(scenario: str, variable: str) -> list[dict]:
+    """Monte Carlo runs this variable's maps exist for (none for ordinary maps)."""
+    return service.list_raster_runs(scenario=scenario, variable=variable)
 
 
 @router.get("/raster/{raster_id}")
@@ -94,6 +102,8 @@ class AsciiExportItem(BaseModel):
 
 class AsciiExportIn(BaseModel):
     scenario: str
+    # Monte Carlo maps: the run shown (a run_id from /spatial/runs).
+    run: str | None = None
     # Each variable with its own groups/fleets and year range (chosen per
     # variable in the spatial view).
     items: list[AsciiExportItem]
@@ -112,7 +122,7 @@ def export_ascii(body: AsciiExportIn) -> StreamingResponse:
     for item in body.items:
         wanted = set(item.entities)
         candidates = [
-            r for r in service.list_rasters(scenario=body.scenario, variable=item.variable)
+            r for r in service.list_rasters(scenario=body.scenario, variable=item.variable, run=body.run)
             if item.year_from <= r["year"] <= item.year_to
         ]
         picked = [r for r in candidates
@@ -133,6 +143,7 @@ def export_ascii(body: AsciiExportIn) -> StreamingResponse:
     selection = {
         "model": rows[0].get("model_name") or rows[0].get("model"),
         "scenario": body.scenario,
+        "monte_carlo_run": run_label(body.run) if body.run else None,
         "areas": [a.name for a in body.areas] or ["full-area (whole model grid)"],
         "data_source": source.name if source else None,
         "variables": variables,
@@ -156,3 +167,75 @@ def export_ascii(body: AsciiExportIn) -> StreamingResponse:
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         background=BackgroundTask(out.close),
     )
+
+
+class ZonalAreaIn(BaseModel):
+    id: str
+    name: str
+    # Area definition, see regions/masks.py ({"groups": [[item, ...], ...]}).
+    area: dict
+
+
+class ZonalIn(BaseModel):
+    scenario: str
+    variable: str
+    areas: list[ZonalAreaIn]
+    domain: str = "output"
+    # Group/fleet names; empty = all of the variable's groups/fleets.
+    entities: list[str] = []
+    year_from: int | None = None
+    year_to: int | None = None
+    # Monte Carlo maps: a run_id, "all" (every run: baseline + p05/p95 over the
+    # samples), or omitted (the baseline run). Ignored for ordinary maps.
+    run: str | None = None
+    # Start the work as a background job when it can't be done at once (maps
+    # to download, or many to read) -- sent after the user saw the cost.
+    start: bool = False
+
+
+@router.post("/zonal")
+def zonal_stats(body: ZonalIn) -> dict:
+    """A variable's statistics over areas, per group/fleet and year (see
+    regions/zonal.py). Returns ``{status: "done", result}`` when it's small
+    (a few hundred maps to read, a few dozen to download); otherwise ``{status: "confirm", cost}`` (maps
+    to download/read, bytes, seconds) so the user decides, and with
+    ``start=true`` ``{status: "running", job}`` -- poll ``/spatial/zonal/jobs/{id}``."""
+    from ecosim.regions import zonal
+    from ecosim.regions.masks import AreaError
+
+    req = zonal.ZonalRequest(
+        scenario=body.scenario, variable=body.variable, domain=body.domain,
+        areas=[a.model_dump() for a in body.areas], entities=body.entities,
+        year_from=body.year_from, year_to=body.year_to, run=body.run,
+    )
+    try:
+        plan = zonal.make_plan(req)
+        if plan.inline:
+            return {"status": "done", "result": zonal.compute(plan)}
+    except AreaError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not body.start:
+        return {"status": "confirm", "cost": plan.cost()}
+    return {"status": "running", "job": zonal.start_job(plan).to_dict()}
+
+
+@router.get("/zonal/jobs/{job_id}")
+def zonal_job(job_id: str) -> dict:
+    from ecosim.regions import zonal
+
+    job = zonal.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="No such job (the server may have been restarted).")
+    return job.to_dict()
+
+
+@router.post("/zonal/jobs/{job_id}/cancel")
+def zonal_job_cancel(job_id: str) -> dict:
+    """Stops after the current file; whatever was computed stays cached."""
+    from ecosim.regions import zonal
+
+    job = zonal.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="No such job.")
+    job.cancel_event.set()
+    return job.to_dict()

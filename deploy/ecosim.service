@@ -1,0 +1,24 @@
+# /etc/systemd/system/ecosim.service
+[Unit]
+Description=Ecosim Results Explorer (API)
+After=network.target
+
+[Service]
+User=ecosim
+Group=ecosim
+WorkingDirectory=/srv/ecosim/app
+EnvironmentFile=/etc/ecosim/ecosim.env
+Environment=PYTHONPATH=/srv/ecosim/app/backend
+ExecStart=/srv/ecosim/app/.venv/bin/python -m ecosim.cli serve --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+# Hardening: the service only writes its profile.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/ecosim/profile
+ReadOnlyPaths=/srv/ecosim/data /srv/ecosim/app /srv/ecosim/python
+
+[Install]
+WantedBy=multi-user.target

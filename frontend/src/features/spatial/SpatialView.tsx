@@ -7,65 +7,14 @@ import { MapViewSync, RasterMap, type RasterStats } from "./RasterMap";
 import { RasterLegend } from "./RasterLegend";
 import { ExportPanel } from "./ExportPanel";
 import { PALETTE_OPTIONS, PALETTE_SWATCH, type PaletteId } from "./colorScale";
-
-const AOI_STORAGE_KEY = "ecosim.aois.v2";
-
-interface NamedAoi {
-  id: string;
-  name: string;
-  geojson: GeoJSON.FeatureCollection;
-}
-
-interface StoredAois {
-  aois: NamedAoi[];
-  selectedAoiIds: string[];
-}
+import { AreaPicker, type AreaPickerTab } from "../areas/AreaPicker";
+import { AreaSummaryPanel } from "../areas/AreaSummaryPanel";
+import { AnalysisPanel } from "../analyses/AnalysisPanel";
+import { useAreaBuilder, useAreaLibrary, useAreaShapes } from "../areas/useAreas";
 
 function formatLabel(slug: string): string {
   const words = slug.split("_");
   return words.map((w, i) => (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w)).join(" ");
-}
-
-function loadStoredAois(): StoredAois {
-  try {
-    const raw = localStorage.getItem(AOI_STORAGE_KEY);
-    if (!raw) return { aois: [], selectedAoiIds: [] };
-    // `activeId` is the old (pre-multi-select) single-selection field --
-    // migrate it into the new array in place so existing saved areas aren't
-    // dropped just because the selection model changed.
-    const parsed = JSON.parse(raw) as Partial<StoredAois> & { activeId?: string | null };
-    const aois = parsed.aois ?? [];
-    const selectedAoiIds = parsed.selectedAoiIds ?? (parsed.activeId ? [parsed.activeId] : []);
-    return { aois, selectedAoiIds };
-  } catch {
-    return { aois: [], selectedAoiIds: [] };
-  }
-}
-
-let aoiIdSeq = 0;
-function makeAoiId(): string {
-  aoiIdSeq += 1;
-  return `aoi_${Date.now()}_${aoiIdSeq}`;
-}
-
-/** "Area 1", "Area 2", ... skipping any name already taken. */
-function nextAoiName(existing: NamedAoi[]): string {
-  const taken = new Set(existing.map((a) => a.name));
-  let n = existing.length + 1;
-  while (taken.has(`Area ${n}`)) n++;
-  return `Area ${n}`;
-}
-
-/** Parse an uploaded area-of-interest file: GeoJSON directly, or a shapefile (.zip/.shp) via shpjs. */
-async function parseAoiFile(file: File): Promise<GeoJSON.FeatureCollection> {
-  const name = file.name.toLowerCase();
-  if (name.endsWith(".geojson") || name.endsWith(".json")) {
-    const parsed = JSON.parse(await file.text());
-    return parsed.type === "FeatureCollection" ? parsed : { type: "FeatureCollection", features: [parsed] };
-  }
-  const shp = (await import("shpjs")).default;
-  const result = await shp(await file.arrayBuffer());
-  return Array.isArray(result) ? result[0] : result;
 }
 
 /** Sort entity names by their dictionary id order, falling back to alphabetical. */
@@ -172,16 +121,25 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
   const [crsReloadToken, setCrsReloadToken] = useState(0);
   // All maps on screen pan and zoom together.
   const viewSync = useMemo(() => new MapViewSync(), []);
-  const [aois, setAois] = useState<NamedAoi[]>(() => loadStoredAois().aois);
-  const [selectedAoiIds, setSelectedAoiIds] = useState<string[]>(() => loadStoredAois().selectedAoiIds);
-  const [aoiError, setAoiError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  // Every currently-checked area, in list order -- shown (outlined) on the
-  // map and clipped to as a union; memoized so RasterMap's effects only
-  // re-fire when the actual selection changes, not on every render.
-  const selectedAois = useMemo(
-    () => aois.filter((a) => selectedAoiIds.includes(a.id)),
-    [aois, selectedAoiIds],
+  // Saved areas (kept in the profile) and the ones checked: each outlined on
+  // the map, which is clipped to them; the same selection is what the
+  // download uses.
+  const library = useAreaLibrary();
+  const [areaTab, setAreaTab] = useState<AreaPickerTab>("draw");
+  const selectedAreas = useMemo(
+    () => library.areas.filter((a) => library.selected.includes(a.id)),
+    [library.areas, library.selected],
+  );
+  const { shapes: selectedAois, problems: areaProblems, summaries: areaSummaries } = useAreaShapes(
+    scenario,
+    selectedAreas,
+  );
+  const areaBuilder = useAreaBuilder(scenario, library, isStepOpen("aoi") && areaTab === "regions");
+  // The checked areas that can be placed on this scenario's grid -- what the
+  // area summary below the maps is computed for.
+  const summaryAreas = useMemo(
+    () => selectedAreas.filter((a) => !areaProblems[a.id]),
+    [selectedAreas, areaProblems],
   );
 
   const { palette, invert, domainMode, manualMin, manualMax } = settings;
@@ -193,49 +151,6 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [domainMode, manualMin, manualMax],
   );
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(AOI_STORAGE_KEY, JSON.stringify({ aois, selectedAoiIds }));
-    } catch {
-      // best-effort persistence only
-    }
-  }, [aois, selectedAoiIds]);
-
-  // A shape drawn on the map is a new saved area -- add it to the library
-  // and select it (on top of whatever else is already selected).
-  const handleAoiDrawn = (geojson: GeoJSON.FeatureCollection) => {
-    const id = makeAoiId();
-    setAois((prev) => [...prev, { id, name: nextAoiName(prev), geojson }]);
-    setSelectedAoiIds((prev) => [...prev, id]);
-  };
-
-  const handleAoiUpload = async (file: File) => {
-    setAoiError(null);
-    try {
-      const geojson = await parseAoiFile(file);
-      const id = makeAoiId();
-      const baseName = file.name.replace(/\.(geojson|json|zip|shp)$/i, "") || "Uploaded area";
-      setAois((prev) => [
-        ...prev,
-        { id, name: prev.some((a) => a.name === baseName) ? nextAoiName(prev) : baseName, geojson },
-      ]);
-      setSelectedAoiIds((prev) => [...prev, id]);
-    } catch (err) {
-      setAoiError(`Could not read ${file.name}: ${(err as Error).message}`);
-    }
-  };
-
-  const toggleAoiSelected = (id: string) =>
-    setSelectedAoiIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-
-  const renameAoi = (id: string, name: string) =>
-    setAois((prev) => prev.map((a) => (a.id === id ? { ...a, name } : a)));
-
-  const deleteAoi = (id: string) => {
-    setAois((prev) => prev.filter((a) => a.id !== id));
-    setSelectedAoiIds((prev) => prev.filter((x) => x !== id));
-  };
 
   const scenarioGroups = useMemo(() => {
     const models = new Map<string, { model_name: string; scenarios: Set<string> }>();
@@ -269,11 +184,39 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
         ? "fleet"
         : null;
 
+  // A variable's name as the time series show it where they have it (e.g. the
+  // ECOIND indicator "Total B (ECOIND)"), else from its slug.
+  const layerLabels = useMemo(
+    () => new Map((layers.data ?? []).filter((l) => l.label).map((l) => [l.variable, l.label as string])),
+    [layers.data],
+  );
+  const labelOf = (v: string) => layerLabels.get(v) ?? formatLabel(v);
+
+  // Monte Carlo maps (one set per Ecosampler sample): the run shown -- the
+  // baseline or main run first; "" until the variable's runs are known.
+  const runs = useAsync(
+    () =>
+      scenario && variable && activeLayer && activeLayer.n_runs > 0
+        ? api.spatialRuns({ scenario, variable })
+        : Promise.resolve([]),
+    [scenario, variable, activeLayer?.n_runs],
+  );
+  const runList = runs.data ?? [];
+  const [run, setRun] = useState("");
+  useEffect(() => {
+    if (runList.length && !runList.some((r) => r.run_id === run)) setRun(runList[0].run_id);
+    if (!runList.length && run) setRun("");
+  }, [runList, run]);
+  const isMonteCarlo = !!activeLayer && activeLayer.n_runs > 0;
+
   // Bumped by the "Retry" shown when the variable's map list failed to load.
   const [rastersRetry, setRastersRetry] = useState(0);
   const rasters = useAsync(
-    () => (scenario && variable ? api.spatialRasters({ scenario, variable }) : Promise.resolve<RasterEntry[]>([])),
-    [scenario, variable, rastersRetry],
+    () =>
+      scenario && variable && (!isMonteCarlo || run)
+        ? api.spatialRasters({ scenario, variable, run: run || undefined })
+        : Promise.resolve<RasterEntry[]>([]),
+    [scenario, variable, run, isMonteCarlo, rastersRetry],
   );
 
   const entityNames = useMemo(() => {
@@ -374,6 +317,29 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
   const yearLo = settings.yearMin ?? activeLayer?.year_min ?? 0;
   const yearHi = settings.yearMax ?? activeLayer?.year_max ?? 0;
 
+  // What an R analysis of these areas gets (docs/data-contract.md, manifest
+  // "spatial" + "areas"): the variable on screen, its checked groups/fleets,
+  // year range and the run on the map.
+  const spatialEntities = hasEntity ? visibleSelectedEntities : [];
+  const spatialManifest = useMemo(
+    () =>
+      scenario && variable
+        ? {
+            spatial: {
+              scenario,
+              variable,
+              entities: spatialEntities,
+              year_from: yearLo,
+              year_to: yearHi,
+              ...(isMonteCarlo && run ? { run } : {}),
+            },
+            areas: summaryAreas,
+          }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scenario, variable, spatialEntities.join("|"), yearLo, yearHi, isMonteCarlo, run, summaryAreas],
+  );
+
   // Each checked variable with its own settings -- what the download exports.
   const exportItems = [...selectedVariables].flatMap((v) => {
     const layer = variablesForScenario.find((l) => l.variable === v);
@@ -391,7 +357,7 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
   });
 
   // Which variable steps 3-5 apply to, as a chip in their headers once several are checked.
-  const forVariable = selectedVariables.size > 1 && variable ? formatLabel(variable) : undefined;
+  const forVariable = selectedVariables.size > 1 && variable ? labelOf(variable) : undefined;
 
   // Keep the current year inside the (possibly just-narrowed) range.
   useEffect(() => {
@@ -542,12 +508,33 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
                 onClick={() => focusVariable(l.variable)}
                 title="Show this variable on the map"
               >
-                {formatLabel(l.variable)}
+                {labelOf(l.variable)}
               </span>
               {variable === l.variable && <span className="catalog__onmap">on map</span>}
             </div>
           ))}
         </Step>
+
+        {isMonteCarlo && (
+          <div className="step">
+            <div className="step__head step__head--static">
+              <span className="step__title">Monte Carlo run</span>
+              <span className="step__hint muted">{runList.length} runs</span>
+            </div>
+            <div className="step__body">
+              <select className="mcrun" value={run} onChange={(e) => setRun(e.target.value)}>
+                {runList.map((r) => (
+                  <option key={r.run_id} value={r.run_id}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+              <div className="muted selbox__explain">
+                Each Ecosampler sample has its own maps; one is fetched when shown.
+              </div>
+            </div>
+          </div>
+        )}
 
         {hasEntity && (
           <Step
@@ -716,81 +703,36 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
         <Step
           n={hasEntity ? 6 : 5}
           title="Area of interest"
-          hint={selectedAoiIds.length > 0 ? `${selectedAoiIds.length} selected` : undefined}
+          hint={library.selected.length > 0 ? `${library.selected.length} selected` : undefined}
           open={isStepOpen("aoi")}
           onToggle={() => toggleStep("aoi")}
           bodyClassName="aoictl"
         >
-            <div className="aoictl__row">
-              <button className="btn btn--ghost" onClick={() => fileInputRef.current?.click()}>
-                Upload file
-              </button>
-              <span
-                className="infoicon"
-                tabIndex={0}
-                title="Draw a polygon on the map (top-right tool — click each corner, then click the first point again to close it) or upload one. Each area is saved by name; check any number of them to show and clip the map to their combined extent — the same selection is what a later export/analysis step would use."
-              >
-                ⓘ
-              </span>
-            </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".geojson,.json,.zip,.shp"
-              className="aoictl__file-input"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void handleAoiUpload(file);
-                e.target.value = "";
-              }}
+            <AreaPicker
+              library={library}
+              builder={areaBuilder}
+              tab={areaTab}
+              onTab={setAreaTab}
+              problems={areaProblems}
+              summaries={areaSummaries}
             />
-            {aoiError && <div className="error">{aoiError}</div>}
-
-            <div className="aoilist">
-              {aois.length === 0 && <span className="muted">No saved areas yet.</span>}
-              {aois.map((a) => (
-                <div className="aoilist__item" key={a.id}>
-                  <input
-                    type="checkbox"
-                    checked={selectedAoiIds.includes(a.id)}
-                    onChange={() => toggleAoiSelected(a.id)}
-                  />
-                  <input
-                    className="aoilist__name"
-                    value={a.name}
-                    onChange={(e) => renameAoi(a.id, e.target.value)}
-                  />
-                  <button
-                    className="linkbtn aoilist__delete"
-                    onClick={() => deleteAoi(a.id)}
-                    title={`Delete "${a.name}"`}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-              {selectedAoiIds.length > 0 && (
-                <button className="linkbtn aoilist__clear" onClick={() => setSelectedAoiIds([])}>
-                  Clear selection (show full map)
-                </button>
-              )}
-            </div>
         </Step>
 
         {scenario && activeLayer && year != null && (
           <Step
             n={hasEntity ? 7 : 6}
             title="Download"
-            hint={selectedAoiIds.length > 0 ? "per area" : "whole area"}
+            hint={selectedAois.length > 0 ? "per area" : "whole area"}
             open={isStepOpen("export")}
             onToggle={() => toggleStep("export")}
             bodyClassName=""
           >
             <ExportPanel
               scenario={scenario}
+              run={run || undefined}
               model={activeLayer.model_name ?? activeLayer.model}
               items={exportItems}
-              labelOf={formatLabel}
+              labelOf={labelOf}
               areas={selectedAois}
             />
           </Step>
@@ -816,13 +758,13 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
                   className={`vartabs__tab${variable === v ? " is-active" : ""}`}
                   onClick={() => focusVariable(v)}
                 >
-                  {formatLabel(v)}
+                  {labelOf(v)}
                 </button>
               ))}
             </div>
             {rasters.error && (
               <div className="error pad">
-                Could not load the maps of {formatLabel(variable)}: {rasters.error}{" "}
+                Could not load the maps of {labelOf(variable)}: {rasters.error}{" "}
                 <button className="linkbtn" onClick={() => setRastersRetry((t) => t + 1)}>
                   Retry
                 </button>
@@ -838,7 +780,7 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
                 {mapPanels.map((p) => (
                   <div className="mapgrid__panel" key={p.key}>
                     <div className="mapgrid__title">
-                      <span className="mapgrid__var">{formatLabel(variable)}</span>
+                      <span className="mapgrid__var">{labelOf(variable)}</span>
                       {p.title && <span>{p.title}</span>}
                     </div>
                     <RasterMap
@@ -846,7 +788,8 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
                       prefetchUrl={p.prefetchUrl}
                       onStats={statsSetterFor(p.key)}
                       selectedAois={selectedAois}
-                      onAoiDrawn={handleAoiDrawn}
+                      onAoiDrawn={(geojson) => library.addDrawn(geojson)}
+                      regionOverlay={areaBuilder.mapOverlay}
                       palette={palette}
                       invert={invert}
                       domainOverride={domainOverride}
@@ -856,13 +799,38 @@ export function SpatialView({ groups, fleets }: { groups: DimItem[]; fleets: Dim
                     />
                     <RasterLegend
                       stats={statsByMap[p.key] ?? null}
-                      unitLabel={formatLabel(variable)}
+                      unitLabel={labelOf(variable)}
                       palette={palette}
                       invert={invert}
                     />
                   </div>
                 ))}
               </div>
+            )}
+            {summaryAreas.length > 0 && activeLayer && (!isMonteCarlo || run) && (
+              <AreaSummaryPanel
+                scenario={scenario}
+                variable={variable}
+                variableLabel={labelOf(variable)}
+                entities={hasEntity ? visibleSelectedEntities : []}
+                yearFrom={yearLo}
+                yearTo={yearHi}
+                run={run || undefined}
+                isMonteCarlo={isMonteCarlo}
+                areas={summaryAreas}
+              />
+            )}
+            {summaryAreas.length > 0 && spatialManifest && (
+              <section className="areasummary">
+                <div className="areasummary__head">
+                  <strong>R analyses of these areas</strong>
+                  <span className="muted">
+                    {labelOf(variable)}
+                    {isMonteCarlo && run ? " · the run on the map" : ""}
+                  </span>
+                </div>
+                <AnalysisPanel manifest={spatialManifest} variableNames={[variable]} context="spatial" />
+              </section>
             )}
           </>
         )}

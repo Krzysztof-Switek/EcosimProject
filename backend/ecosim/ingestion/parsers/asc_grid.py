@@ -116,8 +116,19 @@ class AscGridMeta:
     year: int
 
 
+# ECOIND plug-in maps (UG p.229-231): "biodiv_ind_<indicator>-<timestep>.asc", one
+# whole-ecosystem indicator per map (e.g. "biodiv_ind_Commercial B-0012.asc"); the
+# same variables, as ``ecoind_<slug>``, as the Ecosim ECOIND table (ecoind_csv.py).
+_ECOIND_RE = re.compile(r"^biodiv_ind_(.+)-(\d+)\.asc$", re.IGNORECASE)
+
+
 def parse_output_filename(name: str, *, start_year: int) -> AscGridMeta | None:
     """Parse an Ecospace output map filename; ``None`` if not a recognised layer."""
+    m = _ECOIND_RE.match(name)
+    if m:
+        year = start_year + (int(m.group(2)) - 1) // 12
+        return AscGridMeta(variable="ecoind_" + slugify(m.group(1)), domain="output",
+                           entity_type=None, entity_name=None, year=year)
     m = _OUTPUT_RE.match(name)
     if not m:
         return None

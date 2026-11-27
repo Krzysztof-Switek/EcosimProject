@@ -1,4 +1,4 @@
-import type { DimensionKind, TimeseriesRow } from "../../api/types";
+import type { TimeseriesRow } from "../../api/types";
 
 export interface Series {
   key: string;
@@ -6,6 +6,8 @@ export interface Series {
   color: string;
   /** Drawn dashed: a reference (the Ecopath baseline), not model output. */
   dashed?: boolean;
+  /** Monte Carlo: the data key of its [p05, p95] band, drawn shaded behind it. */
+  band?: string;
 }
 
 /** How the Ecopath baseline biomass (B of each group, the state Ecosim starts
@@ -28,7 +30,7 @@ const PALETTE = [
 
 /** A group's or fleet's display label: EwE's own name where the file carried one,
  * else its number -- most EwE outputs (e.g. catch_annual.csv) have numbers only. */
-export function dimensionLabel(kind: DimensionKind, id: number | null, name: string | null): string | null {
+function dimensionLabel(kind: "group" | "fleet", id: number | null, name: string | null): string | null {
   if (name) return name;
   if (id == null) return null;
   return `${kind === "group" ? "Group" : "Fleet"} ${id}`;
@@ -36,7 +38,8 @@ export function dimensionLabel(kind: DimensionKind, id: number | null, name: str
 
 /**
  * Pivot tidy rows into Recharts-ready data. A series is the combination of the
- * dimensions that actually vary (scenario and/or group), so labels stay terse.
+ * dimensions that actually vary (scenario, fleet, group, and the predator/prey
+ * partner of an "attached" box), so labels stay terse.
  */
 export function buildChartModel(
   rows: TimeseriesRow[],
@@ -48,25 +51,31 @@ export function buildChartModel(
 
   const group = (r: TimeseriesRow) => dimensionLabel("group", r.group_id, r.group_name);
   const fleet = (r: TimeseriesRow) => dimensionLabel("fleet", r.fleet_id, r.fleet_name);
+  const partner = (r: TimeseriesRow) => dimensionLabel("group", r.partner_id, r.partner_name);
   const scenarios = new Set(rows.map((r) => r.scenario));
   const groups = new Set(rows.map(group).filter((g) => g));
   const fleets = new Set(rows.map(fleet).filter((f) => f));
+  const partners = new Set(rows.map(partner).filter((p) => p));
   const multiScenario = scenarios.size > 1;
   const multiGroup = groups.size > 1;
   const multiFleet = fleets.size > 1;
+  const multiPartner = partners.size > 1;
 
   const seriesKey = (r: TimeseriesRow): string => {
     const g = group(r);
     const f = fleet(r);
+    const p = partner(r);
     const parts: string[] = [];
     if (multiScenario) parts.push(scenarioLabel(r.scenario));
     if (multiFleet && f) parts.push(f);
     if (multiGroup && g) parts.push(g);
-    if (parts.length === 0) parts.push(g ?? f ?? scenarioLabel(r.scenario));
+    if (multiPartner && p) parts.push(p);
+    if (parts.length === 0) parts.push(p ?? g ?? f ?? scenarioLabel(r.scenario));
     return parts.join(" · ");
   };
 
   const seriesOrder: string[] = [];
+  const banded = new Set<string>();
   const byX = new Map<string | number, Record<string, number | string | null>>();
 
   for (const r of rows) {
@@ -78,8 +87,17 @@ export function buildChartModel(
       bucket = { [xField]: x };
       byX.set(x, bucket);
     }
-    bucket[key] =
-      baselineMode === "relative" ? (r.baseline && r.value != null ? r.value / r.baseline : null) : r.value;
+    const scale = (v: number | null | undefined) =>
+      v == null ? null : baselineMode === "relative" ? (r.baseline ? v / r.baseline : null) : v;
+    bucket[key] = scale(r.value);
+    if (r.p05 != null && r.p95 != null) {
+      const lo = scale(r.p05);
+      const hi = scale(r.p95);
+      if (lo != null && hi != null) {
+        (bucket as Record<string, unknown>)[`${key}__band`] = [lo, hi];
+        banded.add(key);
+      }
+    }
   }
 
   const data = [...byX.values()].sort((a, b) =>
@@ -90,6 +108,7 @@ export function buildChartModel(
     key,
     label: key,
     color: PALETTE[i % PALETTE.length],
+    band: banded.has(key) ? `${key}__band` : undefined,
   }));
 
   // One dashed line per group (scenarios of one model share its baseline),

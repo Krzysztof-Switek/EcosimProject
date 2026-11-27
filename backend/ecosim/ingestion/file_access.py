@@ -212,6 +212,11 @@ def _is_needed(name: str, parent_name: str, kind: SourceKind) -> bool:
     if kind == "output":
         if lower.endswith(".csv") or name == "Ecospace RunInfo.txt":
             return True
+        # ECOIND maps are left to be fetched one at a time when shown
+        # (spatial_pipeline.materialize_raster): an Ecosampler export holds
+        # them per sample -- 119,340 files, ~40 GB in RU_SSP1_Calib.
+        if lower.startswith("biodiv_ind_"):
+            return False
         return lower.endswith(".asc") and parse_output_filename(name, start_year=1998) is not None
     if lower.startswith("trend_") and lower.endswith(".csv"):
         return True

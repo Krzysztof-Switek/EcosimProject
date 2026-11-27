@@ -48,12 +48,12 @@ class UnsupportedCsvShape(ValueError):
     needed: Ecospace's own "export map as CSV" (a raw grid dump, marked
     ``Variable,<name>`` instead -- duplicate of the already-fully-indexed
     ``.asc`` raster of the same data, see ``spatial_pipeline.py``) and
-    per-region age-structure breakdowns (marked only ``Max Age,<n>`` -- a
-    genuinely different, richer shape -- Timestep x Region x age-cohort --
-    not yet representable in this project's tidy schema, a real future
-    feature, not a bug). A distinct type from a generic parse failure so
-    ``ingestion.pipeline.run_ingest`` can skip these cleanly instead of
-    counting them as errors alongside actually-broken files."""
+    per-region age-structure breakdowns (marked only ``Max Age,<n>`` --
+    Timestep x Region x age-cohort, loaded by ``age_structure_csv.py``), and
+    the ECOIND indicator table (``ecoind_csv.py``). A distinct type from a
+    generic parse failure so ``ingestion.pipeline.run_ingest`` can try those
+    parsers and skip the rest cleanly instead of counting them as errors
+    alongside actually-broken files."""
 
 
 @dataclass

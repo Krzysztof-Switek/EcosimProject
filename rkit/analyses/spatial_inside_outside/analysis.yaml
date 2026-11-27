@@ -1,0 +1,12 @@
+id: spatial_inside_outside
+name: "Inside vs outside the area"
+description: >
+  The map variable inside each area of interest compared with the rest of the
+  model's grid, year by year (area-weighted means), with the paired difference
+  over the years.
+requires:
+  domain: spatial
+  areas: true
+  outside: true
+params: []
+entry: entry.R

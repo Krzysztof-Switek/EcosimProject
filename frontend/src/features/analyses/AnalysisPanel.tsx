@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api } from "../../api/client";
+import { api, apiFetch } from "../../api/client";
 import { useAsync } from "../../api/useAsync";
 import type { AnalysisResult } from "../../api/types";
 
@@ -16,7 +16,7 @@ function ArtifactView({ jobId, artifact }: { jobId: string; artifact: AnalysisRe
   const csv = useAsync(
     () =>
       artifact.type === "table" && artifact.path
-        ? fetch(api.artifactUrl(jobId, artifact.path)).then((r) => r.text())
+        ? apiFetch(api.artifactUrl(jobId, artifact.path)).then((r) => r.text())
         : Promise.resolve<string | null>(null),
     [jobId, artifact.path, artifact.type],
   );
@@ -52,6 +52,16 @@ function ArtifactView({ jobId, artifact }: { jobId: string; artifact: AnalysisRe
       </div>
     );
   }
+  if (artifact.type === "map" && artifact.path) {
+    return (
+      <div className="artifact">
+        {artifact.title && <h3 className="artifact__title">{artifact.title}</h3>}
+        <a className="linkbtn" href={api.artifactUrl(jobId, artifact.path)} download>
+          Download map (GeoTIFF)
+        </a>
+      </div>
+    );
+  }
   if (artifact.type === "scalar") {
     return (
       <div className="artifact artifact--scalar">
@@ -70,22 +80,9 @@ function ArtifactView({ jobId, artifact }: { jobId: string; artifact: AnalysisRe
   );
 }
 
-async function downloadFile(res: Response, fallbackName: string) {
-  const disposition = res.headers.get("Content-Disposition") ?? "";
-  const match = /filename="?([^";]+)"?/.exec(disposition);
-  const filename = match?.[1] ?? fallbackName;
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 /**
  * Reusable "what do I do with my current selection" panel: run one of the R
- * analyses compatible with it, or just download the filtered data as a file.
+ * analyses compatible with it (the data itself is downloaded by "Save results").
  * Takes the manifest already built by the caller (the time-series basket
  * today; the spatial AOI selection later) -- this component never builds its
  * own, separate data selection, precisely so there's exactly one place per
@@ -95,14 +92,17 @@ async function downloadFile(res: Response, fallbackName: string) {
 export function AnalysisPanel({
   manifest,
   variableNames,
+  context = "timeseries",
 }: {
   manifest: Record<string, unknown>;
   /** Variable slugs currently selected -- used to filter to compatible analyses. */
   variableNames: string[];
+  /** The view it is in: only analyses run from there are offered. */
+  context?: "timeseries" | "spatial";
 }) {
   const analyses = useAsync(
-    () => (variableNames.length > 0 ? api.analyses(variableNames) : Promise.resolve([])),
-    [variableNames.join(",")],
+    () => (variableNames.length > 0 ? api.analyses(variableNames, context) : Promise.resolve([])),
+    [variableNames.join(","), context],
   );
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   const spec = useMemo(() => analyses.data?.find((a) => a.id === analysisId) ?? null, [analyses.data, analysisId]);
@@ -123,7 +123,6 @@ export function AnalysisPanel({
   const [runError, setRunError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [downloading, setDownloading] = useState(false);
 
   const run = async () => {
     if (!spec) return;
@@ -141,26 +140,9 @@ export function AnalysisPanel({
     }
   };
 
-  const download = async () => {
-    setDownloading(true);
-    setRunError(null);
-    try {
-      const res = await api.exportData(manifest);
-      await downloadFile(res, "ecosim_export.csv");
-    } catch (e) {
-      setRunError((e as Error).message);
-    } finally {
-      setDownloading(false);
-    }
-  };
-
   return (
     <div className="analysispanel">
       <div className="analysispanel__row">
-        <button className="btn btn--ghost" onClick={download} disabled={downloading}>
-          {downloading ? "Downloading…" : "Download data (CSV)"}
-        </button>
-
         {(analyses.data ?? []).length > 0 && (
           <>
             <select
@@ -184,6 +166,20 @@ export function AnalysisPanel({
                       onChange={(e) => setParamValues((v) => ({ ...v, [p.key]: e.target.checked }))}
                     />
                     {p.label ?? p.key}
+                  </>
+                ) : p.type === "choice" ? (
+                  <>
+                    {p.label ?? p.key}
+                    <select
+                      value={String(paramValues[p.key] ?? "")}
+                      onChange={(e) => setParamValues((v) => ({ ...v, [p.key]: e.target.value }))}
+                    >
+                      {(p.choices ?? []).map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
                   </>
                 ) : (
                   <>

@@ -190,5 +190,103 @@ def sources_remove(source_id: str) -> None:
     typer.echo(f"Removed {source_id} from the registry (raw data untouched).")
 
 
+auth_app = typer.Typer(help="Signing in (for a shared server).")
+app.add_typer(auth_app, name="auth")
+
+
+@auth_app.command("set-user")
+def auth_set_user(username: str, role: str = typer.Option("tester", help="admin or tester")) -> None:
+    """Add an account or set its password/role (the password is asked here,
+    never on the command line). The first account must be an admin; that
+    turns signing in on."""
+    from ecosim.core import auth
+
+    password = typer.prompt("Password (10+ characters)", hide_input=True, confirmation_prompt=True)
+    try:
+        auth.set_user(username, password, role)
+    except ValueError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(1) from exc
+    typer.echo(f"Account {username} ({role}) saved in {auth.auth_path()}.")
+
+
+@auth_app.command("remove-user")
+def auth_remove_user(username: str) -> None:
+    from ecosim.core import auth
+
+    try:
+        removed = auth.remove_user(username)
+    except ValueError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(1) from exc
+    typer.echo(f"Removed {username}." if removed else f"No account {username}.")
+
+
+@auth_app.command("status")
+def auth_status() -> None:
+    """Whether signing in is on, and the accounts."""
+    from ecosim.core import auth
+
+    cfg = auth.load_config()
+    typer.echo(f"Signing in: {'on' if cfg else 'off'}{' (required by ECOSIM_REQUIRE_AUTH)' if auth.required() else ''}")
+    for a in cfg.accounts if cfg else ():
+        typer.echo(f"  {a.username}  ({a.role})")
+
+
+@auth_app.command("disable")
+def auth_disable() -> None:
+    """Turn signing in off (removes auth.json) -- for a personal computer only."""
+    from ecosim.core import auth
+
+    typer.echo("Signing in turned off." if auth.disable() else "Signing in was not set up.")
+
+
+regions_app = typer.Typer(help="Reference areas: region map packs (ICES, management layers).")
+app.add_typer(regions_app, name="regions")
+
+
+@regions_app.command("list")
+def regions_list() -> None:
+    """Imported region packs and their layers."""
+    from ecosim.regions import store
+
+    packs = store.list_packs()
+    if not packs:
+        typer.echo("No region packs imported.")
+    for pack in packs:
+        typer.echo(f"{pack['id']}  {pack['name']}  ({pack['source_path']})")
+        for layer in pack["layers"]:
+            g = layer["grid"]
+            typer.echo(f"    {layer['key']:<45} {layer['kind']:<7} {len(layer['classes']):>4} classes  "
+                       f"{g['ncols']}x{g['nrows']} {layer['crs']}")
+
+
+@regions_app.command("import")
+def regions_import(path: str, name: str = typer.Option(None, help="Name shown in the app")) -> None:
+    """Copy a folder or .zip of region maps into the profile."""
+    from pathlib import Path
+
+    from ecosim.regions import store
+
+    try:
+        pack = store.import_pack(Path(path), name)
+    except store.RegionPackError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(1)
+    typer.echo(f"Imported {pack['id']} ({pack['name']}): {len(pack['layers'])} layers.")
+    for warning in pack["warnings"]:
+        typer.echo(f"  ! {warning}")
+
+
+@regions_app.command("remove")
+def regions_remove(pack_id: str) -> None:
+    from ecosim.regions import store
+
+    if not store.remove_pack(pack_id):
+        typer.echo(f"Unknown region pack: {pack_id}")
+        raise typer.Exit(1)
+    typer.echo(f"Removed region pack {pack_id}.")
+
+
 if __name__ == "__main__":
     app()

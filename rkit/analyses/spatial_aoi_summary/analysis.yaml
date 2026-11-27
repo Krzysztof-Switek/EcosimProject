@@ -1,0 +1,12 @@
+id: spatial_aoi_summary
+name: "Area summary and trend"
+description: >
+  The map variable within each area of interest, year by year (area-weighted
+  mean; total for densities), with its linear trend and change between the
+  first and last year.
+requires:
+  domain: spatial
+  areas: true
+params:
+  - { key: statistic, type: choice, choices: [mean, total], default: mean, label: "Statistic" }
+entry: entry.R

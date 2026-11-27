@@ -50,8 +50,11 @@ import pandas as pd
 ProgressFn = Callable[[str, int, int | None], None]
 
 from ecosim.core.config import Settings, get_settings
+from ecosim.catalog.runs import run_roots
 from ecosim.core.schema import slugify
 from ecosim.ingestion.file_access import UnreadableFileError, describe_read_error, is_cloud_only
+from ecosim.ingestion.parsers.age_structure_csv import parse_age_structure_csv
+from ecosim.ingestion.parsers.ecoind_csv import parse_ecoind_csv
 from ecosim.ingestion.parsers.ecosim_csv import UnsupportedCsvShape, parse_ecosim_csv, read_header
 from ecosim.ingestion.parsers.trend_csv import parse_trend_csv
 from ecosim.ingestion.store import write_dataset
@@ -366,6 +369,7 @@ def run_ingest(
     # an ordinary single-run scenario's rows/ids stay exactly as before
     # this existed.
     output_multi_run: dict[str, bool] = {}
+    output_run_roots: dict[str, dict[str, str]] = {}  # scenario -> run folder -> run (catalog/runs.py)
     output_run_count: dict[str, int] = {}
     if settings.output_raw_dir is not None:
         for run in _discover_output(settings.output_raw_dir, on_progress, cancel_event):
@@ -376,8 +380,11 @@ def run_ingest(
             })
             output_model[run.scenario_id] = (run.model_id, run.model_label)
             output_by_scenario[run.scenario_id].extend(run.csv_paths)
-            output_multi_run[run.scenario_id] = len(run.run_dirs) > 1
-            output_run_count[run.scenario_id] = len(run.run_dirs)
+            # One sample writes into several folders -- counted as one run.
+            output_run_roots[run.scenario_id] = run_roots(run.run_dirs)
+            n_runs = len(set(output_run_roots[run.scenario_id].values()))
+            output_multi_run[run.scenario_id] = n_runs > 1
+            output_run_count[run.scenario_id] = n_runs
         if any(output_multi_run.values()):
             report.has_multiple_runs = True
         if output_run_count:
@@ -401,7 +408,7 @@ def run_ingest(
         for csv_path in csv_paths:
             try:
                 run_id = (
-                    str(csv_path.parent.relative_to(settings.output_raw_dir))
+                    output_run_roots[scenario_id][str(csv_path.parent.relative_to(settings.output_raw_dir))]
                     if is_multi_run else None
                 )
                 meta, df = parse_ecosim_csv(
@@ -412,12 +419,22 @@ def run_ingest(
                 if not df.empty:
                     buckets[(meta.variable, meta.freq)].append(df)
             except UnsupportedCsvShape:
-                # Not a failure -- a recognised, known-unsupported shape
-                # (Ecospace map-as-CSV / region-age-structure), see that
-                # exception's docstring. Counted separately, never in
-                # `errors`, same spirit as files skipped for lacking an
-                # EcosimScenario header at all during discovery.
-                report.skipped_unsupported += 1
+                # No "Data," section: the ECOIND indicator table or a region
+                # age-structure table; anything else is a known-unsupported
+                # shape, counted separately, never in `errors`.
+                for parse in (parse_ecoind_csv, parse_age_structure_csv):
+                    try:
+                        for variable, freq, df in parse(
+                            csv_path, scenario=scenario_id,
+                            model=model_id, model_name=model_label, run_id=run_id,
+                        ):
+                            buckets[(variable, freq)].append(df)
+                        report.files_read += 1
+                        break
+                    except UnsupportedCsvShape:
+                        continue
+                else:
+                    report.skipped_unsupported += 1
             except OSError as exc:
                 report.errors.append(describe_read_error(exc, csv_path, settings.output_raw_dir))
             except Exception as exc:  # noqa: BLE001 - collect and continue

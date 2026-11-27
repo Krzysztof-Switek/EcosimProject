@@ -2,8 +2,6 @@ import { useMemo, useState } from "react";
 import type { ModelSummary } from "../../api/types";
 import { Step } from "../../components/Step";
 import type { VariableKey } from "./catalogIndex";
-import { DimensionStep } from "./DimensionStep";
-import type { DimensionPicker } from "./useDimensionPicker";
 import { CATEGORY_ORDER, CATEGORY_LABELS } from "./categories";
 
 type Freq = "annual" | "monthly";
@@ -26,14 +24,7 @@ interface Props {
   // Step 4 — variables
   selectedVarIds: Set<string>;
   onToggleVar: (id: string) => void;
-  focusedVarId: string | null;
-  onFocusVar: (id: string) => void;
   effectiveScenarios: (v: VariableKey) => string[];
-
-  // Steps 5–6 — functional groups and fleets (each shown only when a selected
-  // variable has that dimension)
-  groups: DimensionPicker;
-  fleets: DimensionPicker;
 }
 
 const varId = (v: VariableKey) => `${v.domain}|${v.variable}`;
@@ -44,7 +35,7 @@ interface Section {
   items: VariableKey[];
 }
 
-/** Output variables grouped by Results-Extractor category, drivers last. */
+/** Output variables grouped by Results-Extractor box, drivers last. */
 function buildSections(variables: VariableKey[]): Section[] {
   const byCategory = new Map<string, VariableKey[]>();
   const drivers: VariableKey[] = [];
@@ -73,13 +64,11 @@ function buildSections(variables: VariableKey[]): Section[] {
 }
 
 /**
- * Left-hand guided navigator:
- *   1. Models → 2. Scenarios → 3. Frequency → 4. Variables → 5. Groups → 6. Fleets
- * Steps 1–2 define the global pool of (model, scenario) series; clicking a
- * variable focuses it, and its per-variable model/scenario picker is shown
- * (always visible) at the top of the analysis controls column. Steps 5–6 list
- * the functional groups / fleets present in the chosen variables' data, by EwE
- * number (most EwE outputs carry no names).
+ * Left-hand guided navigator, laid out like the EwE Results Extractor:
+ *   1. Models → 2. Scenarios → 3. Frequency → 4. Variables (in the Extractor's boxes)
+ * Steps 1–2 define the (model, scenario) series every variable plots. Step 5, the
+ * selection of each box with checked variables, sits in the column right next
+ * to this one (AnalysisView), so it is in view while variables are checked.
  */
 export function Sidebar(props: Props) {
   const {
@@ -94,11 +83,7 @@ export function Sidebar(props: Props) {
     onSetModelScenarios,
     selectedVarIds,
     onToggleVar,
-    focusedVarId,
-    onFocusVar,
     effectiveScenarios,
-    groups,
-    fleets,
   } = props;
 
   const [filter, setFilter] = useState("");
@@ -245,12 +230,11 @@ export function Sidebar(props: Props) {
                   section.items.map((v) => {
                     const id = varId(v);
                     const checked = selectedVarIds.has(id);
-                    const focused = focusedVarId === id;
                     const eff = checked ? effectiveScenarios(v) : [];
                     return (
                       <div
                         key={v.key}
-                        className={`catalog__item ${checked ? "is-active" : ""} ${focused ? "is-focused" : ""}`}
+                        className={`catalog__item ${checked ? "is-active" : ""}`}
                       >
                         <input
                           type="checkbox"
@@ -260,18 +244,13 @@ export function Sidebar(props: Props) {
                         />
                         <span
                           className="catalog__item-label catalog__item-label--btn"
-                          onClick={() => onFocusVar(id)}
-                          title="Show its models & scenarios in the controls column"
+                          onClick={() => onToggleVar(id)}
                         >
                           {v.label}
                         </span>
-                        <button
-                          className={`badge ${checked ? "" : "badge--muted"} badge--btn`}
-                          onClick={() => onFocusVar(id)}
-                          title="Choose models & scenarios"
-                        >
+                        <span className={`badge ${checked ? "" : "badge--muted"}`}>
                           {checked ? `${eff.length} series` : `${v.scenarios.length} scen.`}
-                        </button>
+                        </span>
                       </div>
                     );
                   })}
@@ -282,20 +261,6 @@ export function Sidebar(props: Props) {
         </div>
       </div>
 
-      <DimensionStep
-        n={5}
-        title="Groups"
-        picker={groups}
-        open={isStepOpen("groups")}
-        onToggle={() => toggleStep("groups")}
-      />
-      <DimensionStep
-        n={6}
-        title="Fleets"
-        picker={fleets}
-        open={isStepOpen("fleets")}
-        onToggle={() => toggleStep("fleets")}
-      />
     </nav>
   );
 }

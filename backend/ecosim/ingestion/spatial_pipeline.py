@@ -28,8 +28,12 @@ from pathlib import Path
 import pandas as pd
 
 from ecosim.core.config import Settings, get_settings
+from ecosim.catalog.runs import run_roots
 from ecosim.core.schema import RASTER_INDEX_COLUMNS, slugify
-from ecosim.ingestion.file_access import UnreadableFileError, describe_read_error, is_cloud_only
+from ecosim.ingestion.file_access import (
+    SourceNotLocalError, UnreadableFileError, describe_read_error, download_files, is_cloud_only,
+    sync_client_not_running, sync_client_not_running_message,
+)
 from ecosim.ingestion.parsers.asc_grid import parse_input_filename, parse_output_filename, write_cog
 from ecosim.ingestion.parsers.ecosim_csv import read_header
 from ecosim.ingestion.pipeline import _PROGRESS_EVERY, IngestCancelled, ProgressFn
@@ -52,9 +56,15 @@ class SpatialIndexReport:
     # pipeline recognises -- NOT indexed. Counted (with a few example names)
     # instead of dropped silently: a real 2026-09-24 source had 119,067
     # ECOIND-style "biodiv_ind_<indicator>-<timestep>.asc" maps and the scan
-    # reported "0 rasters" with no hint why.
+    # reported "0 rasters" with no hint why (those are indexed since 30.10).
     unrecognized_files: int = 0
     unrecognized_examples: list[str] = field(default_factory=list)
+    # ECOIND "biodiv_ind_Ecospace<step>.csv" tables found beside indexed ECOIND
+    # maps: one row per map cell (Column, Row, Lon, Lat) and a column per
+    # indicator -- the same 39 indicators and time steps as the
+    # biodiv_ind_<indicator>-<step>.asc maps (only "/" in a name is " - " in a
+    # map's file name), so deliberately not loaded a second time.
+    ecoind_map_tables: int = 0
 
 
 _UNRECOGNIZED_EXAMPLES = 3
@@ -98,7 +108,36 @@ def _any_output_raster(root: Path) -> bool:
     return False
 
 
-def _discover_output_rasters(output_raw_dir: Path, unrecognized: list[Path] | None = None) -> list[_Source]:
+def _ecospace_header_nearby(asc_dir: Path) -> dict[str, str]:
+    """The Ecospace header of a map folder without ``Ecospace RunInfo.txt`` -- the
+    ECOIND maps' folder (``<Ecospace scenario>/biodiv_ind_*.asc``) has none, but
+    the region tables EwE writes into it and its subfolders
+    (``RegionAgeStructure/AgeStructure_*.csv``) carry the same
+    ``"<HEADER ecospace/>"`` block: ModelName, EcosimScenario, StartYear,
+    CoordinateSystemWKT. Only local files are read (a cloud-only one would be
+    downloaded); ``{}`` if none has an Ecospace header."""
+    for csv_path in sorted(asc_dir.glob("*.csv")) + sorted(asc_dir.glob("*/*.csv")):
+        if is_cloud_only(csv_path):
+            continue
+        try:
+            # First line only: the map-as-CSV tables beside the maps
+            # (biodiv_ind_Ecospace<step>.csv, ~4 MB) have no header at all.
+            with csv_path.open("r", encoding="utf-8-sig") as fh:
+                if not fh.readline().lstrip('"').startswith("<HEADER"):
+                    continue
+            header = read_header(csv_path)
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "EcospaceScenario" in header and "EcosimScenario" in header:
+            return header
+    return {}
+
+
+def _discover_output_rasters(
+    output_raw_dir: Path,
+    unrecognized: list[Path] | None = None,
+    report: SpatialIndexReport | None = None,
+) -> list[_Source]:
     """Find every Ecospace ``.asc`` output map anywhere under
     ``output_raw_dir`` and its accompanying ``Ecospace RunInfo.txt``.
 
@@ -128,6 +167,11 @@ def _discover_output_rasters(output_raw_dir: Path, unrecognized: list[Path] | No
         elif unrecognized is not None:
             unrecognized.append(grid)
 
+    if report is not None:
+        for asc_dir, grids in by_dir.items():
+            if any(g.name.lower().startswith("biodiv_ind_") for g in grids):
+                report.ecoind_map_tables += sum(1 for _ in asc_dir.glob("biodiv_ind_Ecospace*.csv"))
+
     # Pass 1: resolve each directory's own scenario identity (as before),
     # but don't emit _Source objects yet -- run_id (pass 2) depends on
     # knowing, for every scenario, how many distinct directories it spans.
@@ -136,7 +180,7 @@ def _discover_output_rasters(output_raw_dir: Path, unrecognized: list[Path] | No
     for asc_dir, grids in sorted(by_dir.items()):
         runinfo = asc_dir / "Ecospace RunInfo.txt"
         try:
-            header = read_header(runinfo) if runinfo.exists() else {}
+            header = read_header(runinfo) if runinfo.exists() else _ecospace_header_nearby(asc_dir)
         except OSError as exc:
             raise UnreadableFileError(describe_read_error(exc, runinfo, output_raw_dir)) from exc
         model_label = header.get("ModelName")
@@ -166,10 +210,18 @@ def _discover_output_rasters(output_raw_dir: Path, unrecognized: list[Path] | No
     # docstring note) -- only then does run_id get populated, so an ordinary
     # single-directory scenario's raster ids stay exactly as before this
     # existed.
+    # One Ecosampler sample's maps can lie in several folders: grouped into
+    # runs by the same rule as the time series (catalog/runs.py), so a run_id
+    # names the same sample in both.
+    roots = {
+        scenario: run_roots({str(d.relative_to(output_raw_dir)) for d in dirs})
+        for scenario, dirs in dirs_by_scenario.items()
+    }
     out: list[_Source] = []
     for asc_dir, info in dir_info.items():
-        is_multi_run = len(dirs_by_scenario[info["scenario_id"]]) > 1
-        run_id = str(asc_dir.relative_to(output_raw_dir)) if is_multi_run else None
+        scenario_roots = roots[info["scenario_id"]]
+        is_multi_run = len(set(scenario_roots.values())) > 1
+        run_id = scenario_roots[str(asc_dir.relative_to(output_raw_dir))] if is_multi_run else None
         for grid in sorted(info["grids"]):
             meta = parse_output_filename(grid.name, start_year=info["start_year"])
             if meta is None:
@@ -296,7 +348,7 @@ def build_raster_index(
     # own, hence the guard rather than passing None straight through.
     unrecognized: list[Path] = []
     sources = (
-        _discover_output_rasters(settings.output_raw_dir, unrecognized)
+        _discover_output_rasters(settings.output_raw_dir, unrecognized, report)
         if settings.output_raw_dir is not None else []
     )
     run_ids_by_scenario: dict[str, set[str]] = defaultdict(set)
@@ -384,6 +436,16 @@ def materialize_raster(row: dict, settings: Settings | None = None, *, map_crs: 
     out_path = settings.spatial_dir / row["path"]
     if not out_path.exists():
         src = Path(row["source_path"])
+        if is_cloud_only(src):
+            # Only in the cloud (e.g. one of an Ecosampler export's ECOIND maps,
+            # never fetched up front): download just this file, ~0.3 MB.
+            client = sync_client_not_running(src.parent)
+            if client:
+                raise UnreadableFileError(sync_client_not_running_message(client))
+            try:
+                download_files([(src, src.stat().st_size)], src.parent, workers=1)
+            except SourceNotLocalError as exc:
+                raise UnreadableFileError(str(exc)) from exc
         try:
             write_cog(src, out_path, source_crs_wkt=row.get("source_crs_wkt"), map_crs=map_crs)
         except Exception as exc:

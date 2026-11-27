@@ -1,25 +1,29 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { api } from "../../api/client";
+import { useAsync } from "../../api/useAsync";
+import type { Picks } from "../../api/types";
 import type { VariableKey } from "../catalog/catalogIndex";
-import { VariableSeriesPicker } from "../catalog/VariableSeriesPicker";
+import { CATEGORY_LABELS } from "../catalog/categories";
+import { SelectionStep } from "../catalog/SelectionStep";
+import type { BoxSelection } from "../catalog/useBoxSelections";
 import { VariableChart } from "./VariableChart";
+import { SaveResults } from "./SaveResults";
 import { AnalysisPanel } from "../analyses/AnalysisPanel";
+import { MapSeriesSection } from "../areas/MapSeriesSection";
 
 interface Props {
   variables: VariableKey[]; // selected, already in the active freq
   freq: "annual" | "monthly";
   scenarioLabel: (scenario: string) => string;
-  scenariosForVar: (v: VariableKey) => string[]; // effective per-variable series
-  availableScenarios: (v: VariableKey) => string[]; // candidates allowed by steps 1–2
-  groupIds: number[]; // EwE group numbers chosen in step 5 (sidebar)
-  fleetIds: number[]; // EwE fleet numbers chosen in step 6 (sidebar)
+  scenariosForVar: (v: VariableKey) => string[]; // the series of steps 1–2 that offer it
+  /** Step 5: each Results-Extractor box's selection (shown for boxes with checked variables). */
+  boxes: BoxSelection[];
+  /** The selection of a variable's Results-Extractor box (step 5); undefined
+   * for a variable whose box has none (indicators, fitting statistics, drivers). */
+  picksFor: (v: VariableKey) => Picks | undefined;
+  describePicks: (v: VariableKey) => string;
   onRemove: (varId: string) => void;
   onClear: () => void;
-
-  // Per-variable model/scenario picker (docked top of controls column).
-  focusedVariable: VariableKey | null;
-  hasOverride: (varId: string) => boolean;
-  onSetVarScenarios: (varId: string, scenarios: string[] | null) => void;
-  onFocusVar: (varId: string) => void;
 }
 
 const varId = (v: { domain: string; variable: string }) => `${v.domain}|${v.variable}`;
@@ -32,31 +36,26 @@ const MONTHS = [
 ];
 
 /**
- * Shared analysis workspace. The focused variable's model/scenario picker sits
- * (always visible) at the top of the controls column; the range control below
- * drives the whole grid, as do the groups and fleets picked in steps 5–6 (sidebar). The range control follows the time step
- * (step 3): years for annual, year-months for monthly. The selection is also the
- * "basket" (manifest) that feeds R analyses. Charts only visualise the chosen
- * data — no computation happens here.
+ * Shared analysis workspace. The controls column, right next to the sidebar,
+ * holds step 5 -- the selection of each Results-Extractor box with checked
+ * variables -- then the range control; both drive the whole grid. The range
+ * control follows the time step (step 3): years for annual, months for monthly.
+ * Below it, "Save results" downloads the selection as CSV, like the EwE Results
+ * Extractor. The selection is also the "basket" (manifest) that feeds R analyses.
+ * Charts only visualise the chosen data — no computation happens here.
  */
 export function AnalysisView({
   variables,
   freq,
   scenarioLabel,
   scenariosForVar,
-  availableScenarios,
-  groupIds,
-  fleetIds,
+  boxes,
+  picksFor,
+  describePicks,
   onRemove,
   onClear,
-  focusedVariable,
-  hasOverride,
-  onSetVarScenarios,
-  onFocusVar,
 }: Props) {
   const monthly = freq === "monthly";
-  const anyGroups = variables.some((v) => v.entry.n_groups > 0);
-  const anyFleets = variables.some((v) => v.entry.n_fleets > 0);
   const yearMin = Math.min(...variables.map((v) => v.entry.year_min));
   const yearMax = Math.max(...variables.map((v) => v.entry.year_max));
 
@@ -68,47 +67,117 @@ export function AnalysisView({
   const [monthFrom, setMonthFrom] = useState(1);
   const [monthTo, setMonthTo] = useState(12);
 
+  // Monte Carlo runs of the plotted scenarios; "" = baseline + the samples'
+  // 5–95% band (the manual's way of showing them, UG p.180 Fig. 10).
+  const scenarioKey = [...new Set(variables.flatMap((v) => scenariosForVar(v)))].sort().join("|");
+  const runs = useAsync(
+    () => (scenarioKey ? api.runs(scenarioKey.split("|")) : Promise.resolve([])),
+    [scenarioKey],
+  );
+  const runList = runs.data ?? [];
+  const [run, setRun] = useState("");
+  useEffect(() => {
+    if (run && !runList.some((r) => r.run_id === run)) setRun("");
+  }, [runList, run]);
+  const nSamples = runList.filter((r) => r.kind === "sample").length;
+  const baselineLabel = runList.find((r) => r.kind === "baseline")?.label ?? runList.find((r) => r.kind === "main")?.label;
+
   // Range params forwarded to the API, depending on the time step.
   const range = monthly
     ? { month_from: monthFrom, month_to: monthTo }
     : { year_from: yearFrom, year_to: yearTo };
 
+  // Each variable carries its own box selection (`picks`, see query_timeseries).
+  const picksKey = JSON.stringify(variables.map((v) => picksFor(v) ?? null));
   const manifest = useMemo(
     () => ({
       freq,
-      group_ids: anyGroups ? groupIds : [],
-      fleet_ids: anyFleets ? fleetIds : [],
+      ...(run ? { run } : {}),
       ...range,
       variables: variables.map((v) => ({
         variable: v.variable,
         domain: v.domain,
         scenarios: scenariosForVar(v),
+        ...(picksFor(v) ? { picks: picksFor(v) } : {}),
       })),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [freq, anyGroups, groupIds, anyFleets, fleetIds, yearFrom, yearTo, monthFrom, monthTo, variables, scenariosForVar],
+    [freq, run, picksKey, yearFrom, yearTo, monthFrom, monthTo, variables, scenariosForVar],
   );
 
   const copyManifest = () => {
     void navigator.clipboard?.writeText(JSON.stringify(manifest, null, 2));
   };
 
-  const focusedId = focusedVariable ? varId(focusedVariable) : null;
+  // Step-5 boxes the user folded away (all open by default).
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggleBox = (box: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      next.has(box) ? next.delete(box) : next.add(box);
+      return next;
+    });
+
+  // Checked variables whose box has no selection window -- in EwE, Indicators and
+  // Fitting statistics have no "Change Selection" (one value for the whole
+  // ecosystem or model); shown in step 5 all the same, so it never looks empty.
+  const unselectable = new Map<string, VariableKey[]>();
+  for (const v of variables) {
+    if (picksFor(v) !== undefined) continue;
+    const title =
+      v.domain === "input" ? "Drivers (inputs)" : (v.category && CATEGORY_LABELS[v.category]) || "Other model outputs";
+    unselectable.set(title, [...(unselectable.get(title) ?? []), v]);
+  }
+  const noScenarios = variables.every((v) => scenariosForVar(v).length === 0);
 
   return (
     <div className="analysis">
       <aside className="analysis__controls">
-        {focusedVariable && (
-          <VariableSeriesPicker
-            key={varId(focusedVariable)}
-            variable={focusedVariable}
-            scenarioLabel={scenarioLabel}
-            available={availableScenarios(focusedVariable)}
-            selected={scenariosForVar(focusedVariable)}
-            hasOverride={hasOverride(varId(focusedVariable))}
-            onChange={(list) => onSetVarScenarios(varId(focusedVariable), list)}
-            onClear={() => onSetVarScenarios(varId(focusedVariable), null)}
-          />
+        {noScenarios && (
+          <div className="selbox__note">
+            Pick a model and its scenarios (steps 1–2) to plot and save these variables.
+          </div>
+        )}
+        {[...unselectable].map(([title, vars]) => (
+          <div key={title} className="step selbox__none">
+            <div className="step__head">
+              <span className="step__n">5</span>
+              <span className="step__title">{title}</span>
+            </div>
+            <div className="step__body">
+              <div className="selbox__for muted">For: {vars.map((v) => v.label).join(", ")}</div>
+              <div className="muted selbox__explain">
+                No selection needed: one series per scenario for the whole ecosystem — as in the
+                EwE Results Extractor, this box has no group or fleet selection.
+              </div>
+            </div>
+          </div>
+        ))}
+        {boxes
+          .filter((b) => b.variables.length > 0)
+          .map((b) => (
+            <SelectionStep
+              key={b.box}
+              n={5}
+              sel={b}
+              open={!collapsed.has(b.box)}
+              onToggle={() => toggleBox(b.box)}
+            />
+          ))}
+        {runList.length > 0 && (
+          <div className="field">
+            <label>Monte Carlo runs</label>
+            <select className="mcrun" value={run} onChange={(e) => setRun(e.target.value)}>
+              <option value="">
+                {baselineLabel ?? "Baseline"} + 5–95% band of {nSamples} samples
+              </option>
+              {runList.map((r) => (
+                <option key={`${r.scenario}|${r.run_id}`} value={r.run_id}>
+                  Only {r.label}
+                </option>
+              ))}
+            </select>
+          </div>
         )}
         <div className="field">
           <label>{monthly ? "Month range" : "Year range"}</label>
@@ -150,6 +219,15 @@ export function AnalysisView({
             </div>
           )}
         </div>
+        <SaveResults
+          variables={variables}
+          freq={freq}
+          range={range}
+          run={run || undefined}
+          scenariosFor={scenariosForVar}
+          picksFor={picksFor}
+          describe={describePicks}
+        />
       </aside>
 
       <section className="analysis__main">
@@ -172,20 +250,12 @@ export function AnalysisView({
             {variables.map((v) => {
               const id = varId(v);
               return (
-                <span
-                  key={v.key}
-                  className={`chip chip--btn ${focusedId === id ? "is-focused" : ""}`}
-                  onClick={() => onFocusVar(id)}
-                  title="Edit its models & scenarios"
-                >
+                <span key={v.key} className="chip">
                   {v.label}
                   <button
                     className="chip__x"
                     title="Remove"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onRemove(id);
-                    }}
+                    onClick={() => onRemove(id)}
                   >
                     ✕
                   </button>
@@ -197,6 +267,15 @@ export function AnalysisView({
           <AnalysisPanel manifest={manifest} variableNames={variables.map((v) => v.variable)} />
         </div>
 
+        <MapSeriesSection
+          scenarios={scenarioKey ? scenarioKey.split("|") : []}
+          scenarioLabel={scenarioLabel}
+          yearFrom={monthly ? null : yearFrom}
+          yearTo={monthly ? null : yearTo}
+          run={run}
+          preferVariables={variables.map((v) => v.variable)}
+        />
+
         <div className="analysis__grid">
           {variables.map((v) => (
             <VariableChart
@@ -207,8 +286,9 @@ export function AnalysisView({
               label={v.label}
               scenarios={scenariosForVar(v)}
               scenarioLabel={scenarioLabel}
-              groupIds={groupIds}
-              fleetIds={fleetIds}
+              picks={picksFor(v)}
+              box={v.category ? CATEGORY_LABELS[v.category] : undefined}
+              run={run || undefined}
               range={range}
               onRemove={() => onRemove(varId(v))}
             />

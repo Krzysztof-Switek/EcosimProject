@@ -102,6 +102,8 @@ class BrowseEntry(BaseModel):
     name: str
     path: str
     looks_like_source: bool
+    # A .zip file (listed only with ``zip=true``, for the region-pack picker).
+    is_file: bool = False
 
 
 class BrowseOut(BaseModel):
@@ -345,7 +347,7 @@ def remove_source(source_id: str) -> dict:
 
 
 @router.get("/browse", response_model=BrowseOut)
-def browse(path: str | None = None) -> BrowseOut:
+def browse(path: str | None = None, zip: bool = False) -> BrowseOut:
     """Server-side directory listing for the folder-picker UI -- the browser
     has no way to hand the backend a real filesystem path, so the picker asks
     the backend what it can see instead.
@@ -387,6 +389,12 @@ def browse(path: str | None = None) -> BrowseOut:
         for child in children
         if child.is_dir() and not child.name.startswith(".")
     ]
+    if zip:
+        entries += [
+            BrowseEntry(name=child.name, path=str(child), looks_like_source=False, is_file=True)
+            for child in children
+            if child.suffix.lower() == ".zip" and child.is_file() and not child.name.startswith(".")
+        ]
 
     parent = target.parent
     if on_windows and allowed_root is None and parent == target:

@@ -9,6 +9,7 @@ import { fetchGet } from "../../api/client";
 import type { MapCrsMismatch } from "../../api/types";
 import { makeValueToColor, type PaletteId } from "./colorScale";
 import { MapCrsFix } from "./MapCrsFix";
+import type { RegionMapOverlay } from "../areas/useAreas";
 
 const BALTIC_CENTER: [number, number] = [58.5, 19.5];
 const BALTIC_ZOOM = 5;
@@ -265,6 +266,7 @@ export function RasterMap({
   reloadToken = 0,
   onCrsFixed,
   viewSync,
+  regionOverlay = null,
 }: {
   rasterUrl: string | null;
   /** Fetched+parsed into the cache in the background, without touching the visible layer. */
@@ -286,6 +288,9 @@ export function RasterMap({
   onCrsFixed: () => void;
   /** Shared with the other maps on screen so they all pan/zoom together. */
   viewSync?: MapViewSync;
+  /** While an area is put together from reference areas: the layer's outlines
+   * (click one to check/uncheck it) and the area so far. */
+  regionOverlay?: RegionMapOverlay | null;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -295,6 +300,7 @@ export function RasterMap({
   const reloadTokenRef = useRef(reloadToken);
   const drawnItemsRef = useRef<L.FeatureGroup | null>(null);
   const displayLayerRef = useRef<L.LayerGroup | null>(null);
+  const regionLayerRef = useRef<L.LayerGroup | null>(null);
   // Parsed rasters are immutable once fetched (raw .asc is immutable, and the
   // materialized COG never changes) -- cache them so revisiting a year
   // (autoplay loop, slider scrub back and forth) is instant, no refetch/reparse.
@@ -348,6 +354,9 @@ export function RasterMap({
 
     const displayLayer = new L.LayerGroup().addTo(map);
     displayLayerRef.current = displayLayer;
+    // Above the raster image, so its outlines can be clicked.
+    map.createPane("regions").style.zIndex = "450";
+    regionLayerRef.current = new L.LayerGroup().addTo(map);
 
     map.on(L.Draw.Event.CREATED, (e) => {
       const layer = (e as L.DrawEvents.Created).layer;
@@ -378,6 +387,7 @@ export function RasterMap({
       mapRef.current = null;
       drawnItemsRef.current = null;
       displayLayerRef.current = null;
+      regionLayerRef.current = null;
       overlayRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -398,6 +408,43 @@ export function RasterMap({
         .addTo(displayLayer);
     });
   }, [selectedAois]);
+
+  // Reference areas being picked from: thin outlines, the checked ones filled;
+  // clicking one checks/unchecks it. The area so far (after any intersection)
+  // as a dashed outline on top.
+  useEffect(() => {
+    const group = regionLayerRef.current;
+    if (!group) return;
+    group.clearLayers();
+    if (!regionOverlay) return;
+    const picked = new Set(regionOverlay.picked);
+    if (regionOverlay.outlines) {
+      L.geoJSON(regionOverlay.outlines, {
+        pane: "regions",
+        style: (f) => {
+          const on = picked.has(String(f?.properties?.code));
+          return {
+            color: on ? "#2f6fed" : "#55606e",
+            weight: on ? 1.5 : 0.8,
+            fillColor: "#2f6fed",
+            fillOpacity: on ? 0.3 : 0.03,
+          };
+        },
+        onEachFeature: (f, layer) => {
+          const code = String(f.properties?.code);
+          layer.bindTooltip(code, { sticky: true });
+          layer.on("click", () => regionOverlay.onToggle(code));
+        },
+      }).addTo(group);
+    }
+    if (regionOverlay.preview) {
+      L.geoJSON(regionOverlay.preview, {
+        pane: "regions",
+        interactive: false,
+        style: { color: "#111827", weight: 2, dashArray: "5 4", fillOpacity: 0 },
+      }).addTo(group);
+    }
+  }, [regionOverlay]);
 
   // Fetch + parse the raster whenever the target URL changes (cached after first view).
   useEffect(() => {

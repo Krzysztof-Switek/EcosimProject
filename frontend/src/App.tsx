@@ -4,17 +4,18 @@ import { useAsync } from "./api/useAsync";
 import type { DimItem } from "./api/types";
 import { buildVariableIndex, type VariableKey } from "./features/catalog/catalogIndex";
 import { Sidebar } from "./features/catalog/Sidebar";
-import { useDimensionPicker } from "./features/catalog/useDimensionPicker";
+import { useBoxSelections } from "./features/catalog/useBoxSelections";
 import { AnalysisView } from "./features/timeseries/AnalysisView";
 import { Landing } from "./features/home/Landing";
 import { SpatialView } from "./features/spatial/SpatialView";
-import { MonteCarloView } from "./features/montecarlo/MonteCarloView";
 import { DataSourcePanel } from "./features/datasource/DataSourcePanel";
+import { ReferenceAreasPanel } from "./features/regions/ReferenceAreasPanel";
+import { SignOutButton, useCanManage } from "./features/auth/AuthGate";
 import { useActivationTracker, activationLabel } from "./features/datasource/useActivationTracker";
 
 const varId = (v: { domain: string; variable: string }) => `${v.domain}|${v.variable}`;
 
-type Module = "spatial" | "timeseries" | "montecarlo";
+type Module = "spatial" | "timeseries";
 
 export default function App() {
   // Top-level choice made on the landing screen: which module the user is in.
@@ -37,6 +38,12 @@ export default function App() {
       {theme === "dark" ? "☀ Light" : "🌙 Dark"}
     </button>
   );
+  const barRight = (
+    <>
+      <SignOutButton />
+      {themeToggle}
+    </>
+  );
 
   // Which folders the app reads EwE model output/input data from -- see
   // features/datasource/DataSourcePanel.tsx. Output is mandatory (models/
@@ -48,6 +55,10 @@ export default function App() {
   const [sourceToken, setSourceToken] = useState(0);
   const [sourcePanelKind, setSourcePanelKind] = useState<"output" | "input" | null>(null);
   const sources = useAsync(() => api.sources(), [sourceToken]);
+  const [areasPanelOpen, setAreasPanelOpen] = useState(false);
+  const canManage = useCanManage();
+  const [regionToken, setRegionToken] = useState(0);
+  const regionPacks = useAsync(() => api.regionPacks(), [regionToken]);
   const activeOutput = sources.data?.find((s) => s.kind === "output" && s.active) ?? null;
   const activeInput = sources.data?.find((s) => s.kind === "input" && s.active) ?? null;
 
@@ -130,10 +141,6 @@ export default function App() {
   const [selectedScenarios, setSelectedScenarios] = useState<Set<string>>(new Set());
   // Step 4: chosen variables, tracked freq-agnostically by `${domain}|${variable}`.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  // The variable whose model/scenario picker is shown in the controls column.
-  const [focusedVarId, setFocusedVarId] = useState<string | null>(null);
-  // Per-variable scenario overrides (absent ⇒ follow the pool default).
-  const [perVarScenarios, setPerVarScenarios] = useState<Record<string, string[]>>({});
 
   // Start empty (and reset on each reload): nothing is preselected — the user
   // builds the selection step by step (models → scenarios → variables).
@@ -142,8 +149,6 @@ export default function App() {
     setSelectedModels(new Set());
     setSelectedScenarios(new Set());
     setSelectedIds(new Set());
-    setFocusedVarId(null);
-    setPerVarScenarios({});
   }, [models.data]);
 
   const scenariosOfModel = (model: string): string[] =>
@@ -185,63 +190,26 @@ export default function App() {
   const toggleVar = (id: string) =>
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-        setFocusedVarId((f) => (f === id ? null : f));
-      } else {
-        next.add(id);
-        setFocusedVarId(id); // focus newly added variable
-      }
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
-  // Click a variable name/badge: ensure it is selected and focus its picker.
-  const focusVar = (id: string) => {
-    setSelectedIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
-    setFocusedVarId(id);
-  };
-  const removeVar = (id: string) => {
+  const removeVar = (id: string) =>
     setSelectedIds((prev) => {
       const next = new Set(prev);
       next.delete(id);
       return next;
     });
-    setFocusedVarId((f) => (f === id ? null : f));
-  };
-  const clearVars = () => {
-    setSelectedIds(new Set());
-    setFocusedVarId(null);
-  };
+  const clearVars = () => setSelectedIds(new Set());
 
-  const setVarScenarios = (id: string, scns: string[] | null) =>
-    setPerVarScenarios((prev) => {
-      const next = { ...prev };
-      if (scns === null) delete next[id];
-      else next[id] = scns;
-      return next;
-    });
-
-  // Scenarios a variable may plot, gated by the earlier steps: an output
-  // (model, scenario) is available only if BOTH its model (step 1) and scenario
-  // (step 2) were chosen; input drivers have no model step, so they are always
-  // available. This is the candidate set shown in the step-5 picker.
-  const availableScenarios = (v: VariableKey): string[] =>
+  // Scenarios a variable plots: those chosen in steps 1–2 that offer it -- an
+  // output (model, scenario) only if BOTH its model (step 1) and scenario (step 2)
+  // were chosen; input drivers have no model step, so they are always included.
+  const effectiveScenarios = (v: VariableKey): string[] =>
     v.combos
       .filter((c) =>
         c.model === null ? true : selectedModels.has(c.model) && selectedScenarios.has(c.scenario),
       )
       .map((c) => c.scenario);
-
-  // Effective (plotted) series: the full pool chosen in steps 1–2 by default --
-  // picking a variable should show what you already selected upstream, not
-  // demand a third, seemingly-duplicate confirmation. The per-variable picker
-  // (docked "Models & scenarios" panel) is an *override* for the rarer case of
-  // wanting a different subset for one specific variable; an override is kept
-  // only for currently-available ids (dropped if steps 1–2 later narrow the pool).
-  const effectiveScenarios = (v: VariableKey): string[] => {
-    const avail = availableScenarios(v);
-    const override = perVarScenarios[varId(v)];
-    return override ? override.filter((s) => avail.includes(s)) : avail;
-  };
 
   // Level-0 split: only variables of the active frequency are navigable.
   const inFreq = useMemo(() => variables.filter((v) => v.freq === freq), [variables, freq]);
@@ -249,16 +217,8 @@ export default function App() {
     () => inFreq.filter((v) => selectedIds.has(varId(v))),
     [inFreq, selectedIds],
   );
-  // The focused variable drives the docked model/scenario picker; fall back to
-  // the first selected one so the picker is always visible when there's data.
-  const focusedVariable = useMemo(() => {
-    if (selectedVariables.length === 0) return null;
-    return selectedVariables.find((v) => varId(v) === focusedVarId) ?? selectedVariables[0];
-  }, [selectedVariables, focusedVarId]);
-
-  // Steps 5–6: functional groups and fleets, by EwE number.
-  const groupPicker = useDimensionPicker("group", selectedVariables, effectiveScenarios, freq, reloadToken, models.data);
-  const fleetPicker = useDimensionPicker("fleet", selectedVariables, effectiveScenarios, freq, reloadToken, models.data);
+  // Step 5: the selection of each Results-Extractor box (groups/fleets, and partners).
+  const selection = useBoxSelections(selectedVariables, effectiveScenarios, freq, reloadToken, models.data);
 
   const loading = tree.loading || models.loading;
   const error = tree.error || models.error;
@@ -274,7 +234,7 @@ export default function App() {
       <div className="app">
         <header className="app__bar">
           <span className="app__brand">Ecosim · Results Explorer</span>
-          <div className="app__bar-right">{themeToggle}</div>
+          <div className="app__bar-right">{barRight}</div>
         </header>
         <div className="muted pad">Loading…</div>
       </div>
@@ -286,9 +246,26 @@ export default function App() {
       <div className="app">
         <header className="app__bar">
           <span className="app__brand">Ecosim · Results Explorer</span>
-          <div className="app__bar-right">{themeToggle}</div>
+          <div className="app__bar-right">{barRight}</div>
         </header>
         <div className="error pad">Cannot reach API: {sources.error}</div>
+      </div>
+    );
+  }
+
+  if (areasPanelOpen) {
+    return (
+      <div className="app">
+        <header className="app__bar">
+          <div className="app__bar-left">
+            <button className="btn btn--ghost" onClick={() => setAreasPanelOpen(false)} title="Back">
+              ← Back
+            </button>
+            <span className="app__brand">Ecosim · Results Explorer</span>
+          </div>
+          <div className="app__bar-right">{barRight}</div>
+        </header>
+        <ReferenceAreasPanel onChanged={() => setRegionToken((t) => t + 1)} />
       </div>
     );
   }
@@ -303,7 +280,7 @@ export default function App() {
             </button>
             <span className="app__brand">Ecosim · Results Explorer</span>
           </div>
-          <div className="app__bar-right">{themeToggle}</div>
+          <div className="app__bar-right">{barRight}</div>
         </header>
         <DataSourcePanel
           kind={sourcePanelKind}
@@ -337,7 +314,7 @@ export default function App() {
       <div className="app">
         <header className="app__bar">
           <span className="app__brand">Ecosim · Results Explorer</span>
-          <div className="app__bar-right">{themeToggle}</div>
+          <div className="app__bar-right">{barRight}</div>
         </header>
         {activation.error && (
           <div className="error pad app__activation-error">
@@ -348,6 +325,12 @@ export default function App() {
         <Landing
           onSelect={setModule}
           onOpenSource={setSourcePanelKind}
+          referenceAreas={{
+            packs: regionPacks.data?.length ?? 0,
+            layers: (regionPacks.data ?? []).reduce((n, p) => n + p.layers.length, 0),
+          }}
+          onOpenReferenceAreas={() => setAreasPanelOpen(true)}
+          canManage={canManage}
           activeOutput={activeOutput}
           activeInput={activeInput}
           onSourcesChanged={() => setSourceToken((t) => t + 1)}
@@ -371,35 +354,12 @@ export default function App() {
           <div className="app__bar-right">
             {activationPill}
             {dataSourceReadout}
-            {themeToggle}
+            {barRight}
           </div>
         </header>
         <div className="app__body">
           <main className="app__main">
             <SpatialView groups={groups} fleets={fleets} />
-          </main>
-        </div>
-      </div>
-    );
-  }
-
-  if (module === "montecarlo") {
-    return (
-      <div className="app">
-        <header className="app__bar">
-          <div className="app__bar-left">
-            {homeBtn}
-            <span className="app__brand">Monte Carlo</span>
-          </div>
-          <div className="app__bar-right">
-            {activationPill}
-            {dataSourceReadout}
-            {themeToggle}
-          </div>
-        </header>
-        <div className="app__body">
-          <main className="app__main">
-            <MonteCarloView activeOutput={activeOutput} />
           </main>
         </div>
       </div>
@@ -420,10 +380,12 @@ export default function App() {
           </span>
           {activationPill}
           {dataSourceReadout}
-          {themeToggle}
-          <button className="btn" onClick={reloadData} disabled={reloading}>
-            {reloading ? "Reloading…" : "Reload Data"}
-          </button>
+          {barRight}
+          {canManage && (
+            <button className="btn" onClick={reloadData} disabled={reloading}>
+              {reloading ? "Reloading…" : "Reload Data"}
+            </button>
+          )}
         </div>
       </header>
 
@@ -444,11 +406,7 @@ export default function App() {
             onSetModelScenarios={setModelScenarios}
             selectedVarIds={selectedIds}
             onToggleVar={toggleVar}
-            focusedVarId={focusedVariable ? varId(focusedVariable) : null}
-            onFocusVar={focusVar}
             effectiveScenarios={effectiveScenarios}
-            groups={groupPicker}
-            fleets={fleetPicker}
           />
           <main className="app__main">
             {selectedVariables.length > 0 ? (
@@ -458,21 +416,17 @@ export default function App() {
                 freq={freq}
                 scenarioLabel={scenarioLabel}
                 scenariosForVar={effectiveScenarios}
-                availableScenarios={availableScenarios}
-                groupIds={groupPicker.effectiveIds}
-                fleetIds={fleetPicker.effectiveIds}
+                picksFor={selection.picksFor}
+                boxes={selection.boxes}
+                describePicks={selection.describe}
                 onRemove={removeVar}
                 onClear={clearVars}
-                focusedVariable={focusedVariable}
-                hasOverride={(id) => id in perVarScenarios}
-                onSetVarScenarios={setVarScenarios}
-                onFocusVar={focusVar}
               />
             ) : (
               <div className="muted pad">
                 Pick models and scenarios (steps 1–2), then check one or more variables
-                (step 4) and, for per-group or per-fleet variables, the groups and fleets
-                (steps 5–6) to build an analysis.
+                (step 4) and, for each box of per-group or per-fleet variables, its
+                selection (step 5) to build an analysis.
               </div>
             )}
           </main>

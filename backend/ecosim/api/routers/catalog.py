@@ -26,27 +26,22 @@ def tree() -> list[dict]:
     return service.get_scenario_tree()
 
 
-@router.get("/groups")
-def groups(
-    variable: list[str] = Query(..., description="One or more canonical variable slugs"),
+@router.get("/selection")
+def selection(
+    category: str = Query(..., description="Results-Extractor box, e.g. 'prey_with_predators'"),
+    variable: list[str] = Query(..., description="The box's checked variables"),
     freq: str = Query("annual", pattern="^(annual|monthly)$"),
     scenario: list[str] | None = Query(None, description="One or more scenario ids"),
 ) -> list[dict]:
-    """Functional groups present in these variables' data (step 5 of the time-series
-    navigator): EwE group number (``id``), its ``name`` where EwE wrote one, and which
-    variables it occurs in."""
-    return service.list_dimension(dimension="group", variable=variable, freq=freq, scenario=scenario)
+    """The box's selection window (time-series step 5): its groups or fleets present
+    in these variables' data and, in an "attached" box, each one's partners."""
+    return service.list_selection_options(category=category, variable=variable, freq=freq, scenario=scenario)
 
 
-@router.get("/fleets")
-def fleets(
-    variable: list[str] = Query(..., description="One or more canonical variable slugs"),
-    freq: str = Query("annual", pattern="^(annual|monthly)$"),
-    scenario: list[str] | None = Query(None, description="One or more scenario ids"),
-) -> list[dict]:
-    """Fleets present in these variables' data (step 6 of the time-series navigator),
-    same shape as ``/catalog/groups``."""
-    return service.list_dimension(dimension="fleet", variable=variable, freq=freq, scenario=scenario)
+@router.get("/runs")
+def runs(scenario: list[str] | None = Query(None, description="One or more scenario ids")) -> list[dict]:
+    """Monte Carlo / Ecosampler runs of these scenarios (none for ordinary output)."""
+    return service.list_runs(scenario=scenario)
 
 
 @router.get("/datasets")

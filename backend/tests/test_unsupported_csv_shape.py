@@ -3,9 +3,9 @@ this pipeline doesn't turn into tidy rows -- added 2026-08-28 after a real
 RU_SSP1 activation logged 3,765 "errors" that were actually two distinct,
 harmless-to-skip shapes: Ecospace's own "export map as CSV" (a raw grid
 dump, duplicate of the already-fully-indexed .asc raster of the same data)
-and per-region age-structure breakdowns (a genuinely different, richer
-shape -- Timestep x Region x age-cohort -- not yet representable in this
-project's tidy schema, a real future feature, not a bug).
+and per-region age-structure breakdowns (Timestep x Region x age-cohort --
+parse_ecosim_csv still rejects them; since 2026-10-30 run_ingest loads them
+with parsers/age_structure_csv.py).
 
 Both shapes share one clean structural signature, confirmed by reading the
 real files directly: neither has a ``Data,<Label>`` marker row that every
@@ -77,9 +77,10 @@ def test_region_age_structure_is_recognised_as_unsupported_not_an_error(tmp_path
 
 
 def test_run_ingest_counts_unsupported_shapes_separately_from_errors(tmp_path):
-    # A folder with one REAL, parseable file alongside both unsupported
-    # shapes -- proves run_ingest ingests the real one, and skips the other
-    # two into `skipped_unsupported`, never into `errors`.
+    # A folder with a real Ecosim file, an age-structure table (loaded since
+    # 2026-10-30, see parsers/age_structure_csv.py) and a map-as-CSV --
+    # proves run_ingest loads the first two and skips the map into
+    # `skipped_unsupported`, never into `errors`.
     ecosim_dir = tmp_path / "ecosim_test_scenario"
     ecosim_dir.mkdir()
     (ecosim_dir / "biomass_annual.csv").write_text(
@@ -93,6 +94,6 @@ def test_run_ingest_counts_unsupported_shapes_separately_from_errors(tmp_path):
     settings = Settings(output_raw_dir=tmp_path, store_dir=tmp_path / "store")
     report = run_ingest(settings)
 
-    assert report.files_read == 1  # only the real biomass_annual.csv
-    assert report.skipped_unsupported == 2  # map-as-csv + age-structure
+    assert report.files_read == 2  # biomass_annual.csv + the age-structure table
+    assert report.skipped_unsupported == 1  # map-as-csv
     assert report.errors == []  # neither counted as a real error

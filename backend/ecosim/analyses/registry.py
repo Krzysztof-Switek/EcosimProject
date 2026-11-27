@@ -19,6 +19,8 @@ class ParamSpec(BaseModel):
     type: str
     default: object = None
     label: str | None = None
+    # type "choice": the allowed values.
+    choices: list[str] | None = None
 
 
 class AnalysisSpec(BaseModel):
@@ -33,6 +35,12 @@ class AnalysisSpec(BaseModel):
     @property
     def entry_path(self) -> Path:
         return self.dir / self.entry
+
+    @property
+    def context(self) -> str:
+        """Where it runs from: ``timeseries`` (the time-series basket) or
+        ``spatial`` (maps + areas, ``requires.domain: spatial``)."""
+        return "spatial" if self.requires.get("domain") == "spatial" else "timeseries"
 
     def is_compatible(self, available_variables: set[str]) -> bool:
         """Whether this analysis' declared requirements are met by whatever

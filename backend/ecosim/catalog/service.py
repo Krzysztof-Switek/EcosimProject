@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
+from ecosim.catalog.categories import CATEGORY_DIMS
+from ecosim.catalog.runs import RUN_KIND_SQL, run_label
 from ecosim.core.config import Settings, get_settings
 from ecosim.core.db import connect
 from ecosim.core.workspace import get_workspace_registry
@@ -64,19 +66,47 @@ def ecopath_baseline_biomass() -> dict[str, dict[int, float]]:
 _BASELINE_VARIABLES = {"biomass"}
 
 
+def _ecopath_numbers(names: dict[str, dict[int, str]]) -> dict[str, dict[str, int]]:
+    """``{model: {lower-cased group name: group number}}`` -- the inverse of
+    ``ecopath_group_names`` for files that name groups instead of numbering them."""
+    return {m: {n.lower(): gid for gid, n in groups.items()} for m, groups in names.items()}
+
+
+def _resolve_group(model: str | None, gid, name, names, numbers) -> tuple[int | None, str | None]:
+    """A functional group's (number, name), each completed from the model's
+    Ecopath output where the file had only the other: most EwE outputs carry
+    only numbers, predation/prey files only names (lower-cased in their file
+    names, so the Ecopath spelling is preferred)."""
+    if gid is not None:
+        return int(gid), name if name is not None else names.get(model, {}).get(int(gid))
+    if name is not None:
+        found = numbers.get(model, {}).get(name.lower())
+        if found is not None:
+            return found, names[model][found]
+    return None, name
+
+
 def _annotate_from_ecopath(rows: list[dict]) -> list[dict]:
-    """Name the groups EwE wrote only as numbers, and give biomass rows their
-    group's Ecopath ``baseline`` (None where unknown)."""
+    """Complete group (and predator/prey partner) numbers and names from the
+    model's Ecopath output, and give biomass rows their group's Ecopath
+    ``baseline`` (None where unknown)."""
     if not rows:
         return rows
-    names = ecopath_group_names() if any(r.get("group_name") is None for r in rows) else {}
+    incomplete = any(
+        (r.get(f"{d}_id") is None) != (r.get(f"{d}_name") is None)
+        for r in rows for d in ("group", "partner")
+    )
+    names = ecopath_group_names() if incomplete else {}
+    numbers = _ecopath_numbers(names)
     baseline = ecopath_baseline_biomass() if rows[0].get("variable") in _BASELINE_VARIABLES else {}
     for r in rows:
-        gid = r.get("group_id")
         model = r.get("model_name")
-        if r.get("group_name") is None and gid is not None:
-            r["group_name"] = names.get(model, {}).get(int(gid))
-        r["baseline"] = baseline.get(model, {}).get(int(gid)) if gid is not None else None
+        for d in ("group", "partner"):
+            r[f"{d}_id"], r[f"{d}_name"] = _resolve_group(
+                model, r.get(f"{d}_id"), r.get(f"{d}_name"), names, numbers,
+            )
+        gid = r["group_id"]
+        r["baseline"] = baseline.get(model, {}).get(gid) if gid is not None else None
     return rows
 
 
@@ -202,15 +232,27 @@ def query_timeseries(
     year_to: int | None = None,
     month_from: int | None = None,
     month_to: int | None = None,
+    picks: list[list[str]] | None = None,
+    run: str | None = None,
 ) -> list[dict]:
     """Return tidy rows for charting. ``group``/``fleet`` match names case-insensitively;
-    ``group_id``/``fleet_id`` match EwE's own numbers -- the usual way to pick them, since
-    most EwE outputs (e.g. ``catch_annual.csv``, ``year\\group,1,2,...``) carry only the
-    number and no name (see ``list_dimension``).
+    ``group_id``/``fleet_id`` match EwE's own numbers -- most EwE outputs (e.g.
+    ``catch_annual.csv``, ``year\\group,1,2,...``) carry only the number and no name.
+
+    ``picks`` is the selection made in the variable's Results-Extractor box (see
+    ``list_selection_options``): ``[parent]`` or ``[parent, partner]`` entity keys.
+    Ignored for a variable whose box has no selection window; an empty list
+    selects nothing.
 
     Range filtering: ``year_from``/``year_to`` bound by calendar year; for monthly
     data ``month_from``/``month_to`` additionally bound by month-of-year (1–12),
     so a seasonal subset (e.g. June–August across all years) can be selected.
+
+    Monte Carlo scenarios (several runs, see catalog/runs.py): ``run`` returns that
+    one run's rows; without it, one row per point summarising the runs --
+    ``value`` from the Ecosampler baseline run (else the run outside the sample
+    folders, else the median), ``p05``/``p95`` the 5th/95th percentile over the
+    samples and ``n_samples`` how many there were. Ordinary rows get no such keys.
     """
     settings = settings or get_settings()
     clauses = ["variable = ?", "freq = ?"]
@@ -245,61 +287,176 @@ def query_timeseries(
     if month_to is not None:
         clauses.append("month <= ?")
         params.append(month_to)
-    sql = (
-        "SELECT model, model_name, scenario, variable, freq, date, year, month, "
-        "group_id, group_name, fleet_id, fleet_name, partner_id, partner_name, value "
-        "FROM timeseries WHERE " + " AND ".join(clauses) +
-        " ORDER BY model, scenario, group_id, group_name, fleet_id, fleet_name, partner_name, year, month"
-    )
+    if run is not None:
+        clauses.append("run_id = ?")
+        params.append(run)
     with _ro(settings) as con:
+        if picks is not None:
+            dims = CATEGORY_DIMS.get(variable_category(con, variable))
+            if dims is not None:
+                clause, keys = _picks_clause(dims, picks)
+                clauses.append(clause)
+                params += keys
+        where = " AND ".join(clauses)
+        order = " ORDER BY model, scenario, group_id, group_name, fleet_id, fleet_name, partner_id, partner_name, year, month"
+        if run is None and _has_runs(con, scenario):
+            sql = (
+                f"SELECT {_POINT_COLUMNS}, "
+                "coalesce(any_value(value) FILTER (WHERE kind = 'baseline'), "
+                "any_value(value) FILTER (WHERE kind IN ('single', 'main')), median(value)) AS value, "
+                "quantile_cont(value, 0.05) FILTER (WHERE kind = 'sample') AS p05, "
+                "quantile_cont(value, 0.95) FILTER (WHERE kind = 'sample') AS p95, "
+                "count(*) FILTER (WHERE kind = 'sample') AS n_samples "
+                f"FROM (SELECT *, {RUN_KIND_SQL} AS kind FROM timeseries WHERE {where}) "
+                f"GROUP BY {_POINT_COLUMNS}" + order
+            )
+        else:
+            sql = f"SELECT {_POINT_COLUMNS}, value FROM timeseries WHERE {where}" + order
         return _annotate_from_ecopath(_rows(con, sql, params))
 
 
-# Dimensions list_dimension can enumerate -> their (id, name) columns. A fixed map,
-# so nothing caller-supplied is ever interpolated into SQL.
-_DIMENSION_COLUMNS = {"group": ("group_id", "group_name"), "fleet": ("fleet_id", "fleet_name")}
+_POINT_COLUMNS = (
+    "model, model_name, scenario, variable, freq, date, year, month, "
+    "group_id, group_name, fleet_id, fleet_name, partner_id, partner_name"
+)
 
 
-def list_dimension(
+def _has_runs(con, scenario: list[str] | None) -> bool:
+    """Whether these scenarios (all, if None) hold Monte Carlo runs."""
+    sql = "SELECT 1 FROM catalog_runs" + (f" WHERE scenario IN ({_placeholders(scenario)})" if scenario else "")
+    try:
+        return bool(con.execute(sql + " LIMIT 1", scenario or []).fetchall())
+    except Exception:  # noqa: BLE001 -- a catalog built before catalog_runs existed
+        return False
+
+
+def list_runs(settings: Settings | None = None, *, scenario: list[str] | None = None) -> list[dict]:
+    """The Monte Carlo runs of these scenarios: ``{scenario, run_id, kind, label}``,
+    baseline first, then the main run, then the samples in order."""
+    settings = settings or get_settings()
+    sql = "SELECT scenario, run_id, kind FROM catalog_runs"
+    if scenario:
+        sql += f" WHERE scenario IN ({_placeholders(scenario)})"
+    with _ro(settings) as con:
+        try:
+            rows = _rows(con, sql, scenario or [])
+        except Exception:  # noqa: BLE001 -- a catalog built before catalog_runs existed
+            return []
+    rank = {"baseline": 0, "main": 1, "sample": 2}
+    for r in rows:
+        r["label"] = run_label(r["run_id"])
+    return sorted(rows, key=lambda r: (r["scenario"], rank.get(r["kind"], 3), r["label"]))
+
+
+# Each dimension's (id, name) columns. A fixed map, so nothing caller-supplied
+# is ever interpolated into SQL.
+_DIM_COLUMNS = {
+    "group": ("group_id", "group_name"),
+    "fleet": ("fleet_id", "fleet_name"),
+    "partner": ("partner_id", "partner_name"),
+}
+_KEY_SEP = chr(31)  # between parent and partner key (SQL: chr(31)); in no EwE name
+
+
+def _key_sql(dim: str) -> str:
+    """A row's entity key in ``dim``: EwE's number where the file has one, else
+    the lower-cased name (predation/prey files name species, never number them)."""
+    id_col, name_col = _DIM_COLUMNS[dim]
+    return f"coalesce(CAST({id_col} AS VARCHAR), lower({name_col}))"
+
+
+def _picks_clause(dims: tuple[str, str | None], picks: list[list[str]]) -> tuple[str, list[str]]:
+    parent, child = dims
+    if child is None:
+        keys, expr = [p[0] for p in picks if p], _key_sql(parent)
+    else:
+        keys = [f"{p[0]}{_KEY_SEP}{p[1]}" for p in picks if len(p) > 1]
+        expr = f"{_key_sql(parent)} || chr(31) || {_key_sql(child)}"
+    if not keys:
+        return "FALSE", []
+    return f"{expr} IN ({_placeholders(keys)})", keys
+
+
+def variable_category(con, variable: str) -> str | None:
+    """The Results-Extractor box of an output variable (``catalog_datasets``)."""
+    rows = _rows(con, "SELECT any_value(category) AS category FROM catalog_datasets WHERE variable = ?", [variable])
+    return rows[0]["category"] if rows else None
+
+
+def list_selection_options(
     settings: Settings | None = None,
     *,
-    dimension: str,
+    category: str,
     variable: list[str],
     freq: str = "annual",
     scenario: list[str] | None = None,
 ) -> list[dict]:
-    """Functional groups or fleets (``dimension``) present in the data of ``variable``
-    (one or more) for the given scenarios -- the options for picking them. One row
-    per EwE number (``id``) with the variables it occurs in, and its ``name`` only
-    where EwE wrote one into the file itself (no id->name dictionary exists; EwE
-    numbers groups and fleets per model, in the order the modeller entered them --
-    docs/ewe-data-formats.md, section 5). A group with no name in the file gets
-    the one from its model's Ecopath output, if known (``ecopath_group_names``);
-    if the selected scenarios mix models that name a number differently, the
-    names are joined with " / "."""
-    id_col, name_col = _DIMENSION_COLUMNS[dimension]
+    """The selection window of one Results-Extractor box (UG p.128-129): the
+    entities of its parent dimension present in the data of ``variable`` (the
+    box's checked variables) for the given scenarios -- and, in an "attached"
+    box, each one's partners (``children``). Every entity is
+    ``{key, id, name, variables}``: ``key`` is what ``picks`` take, ``id``/``name``
+    are EwE's number and name, each completed from the model's Ecopath output
+    where the file had only the other (if the scenarios mix models that name a
+    number differently, the names are joined with " / "); ``variables`` are the
+    ones it occurs in. Ordered by EwE number, unnumbered ones last by name."""
+    dims = CATEGORY_DIMS.get(category)
+    if dims is None:
+        return []
+    parent, child = dims
     settings = settings or get_settings()
-    clauses = [f"variable IN ({_placeholders(variable)})", "freq = ?", f"{id_col} IS NOT NULL"]
+    clauses = [f"variable IN ({_placeholders(variable)})", "freq = ?"]
     params: list = [*variable, freq]
     if scenario:
         clauses.append(f"scenario IN ({_placeholders(scenario)})")
         params += scenario
+    pid, pname = _DIM_COLUMNS[parent]
+    cols = [f"{_key_sql(parent)} AS pk", f"{pid} AS p_id", f"{pname} AS p_name"]
+    keys = ["pk"]
+    if child:
+        cid, cname = _DIM_COLUMNS[child]
+        cols += [f"{_key_sql(child)} AS ck", f"{cid} AS c_id", f"{cname} AS c_name"]
+        keys.append("ck")
+    values = ", ".join(f"any_value({c}) AS {c}" for c in ("p_id", "p_name", "c_id", "c_name")[: 2 * len(keys)])
     sql = (
-        f"SELECT {id_col} AS id, any_value({name_col}) AS name, "
-        "list(DISTINCT variable ORDER BY variable) AS variables, "
+        f"SELECT {', '.join(keys)}, {values}, list(DISTINCT variable ORDER BY variable) AS variables, "
         "list(DISTINCT model_name) AS model_names "
-        "FROM timeseries WHERE " + " AND ".join(clauses) +
-        f" GROUP BY {id_col} ORDER BY {id_col}"
+        f"FROM (SELECT {', '.join(cols)}, variable, model_name FROM timeseries WHERE {' AND '.join(clauses)}) "
+        f"WHERE {' AND '.join(f'{k} IS NOT NULL' for k in keys)} GROUP BY {', '.join(keys)}"
     )
     with _ro(settings) as con:
         rows = _rows(con, sql, params)
-    lookup = ecopath_group_names() if dimension == "group" and any(r["name"] is None for r in rows) else {}
+
+    names = ecopath_group_names() if rows else {}
+    numbers = _ecopath_numbers(names)
+
+    def entity(dim: str, key: str, eid, name, models: list[str], variables: list[str]) -> dict:
+        if dim != "fleet":  # groups, predators and prey are all functional groups
+            found = {_resolve_group(m, eid, name, names, numbers) for m in models} or {(eid, name)}
+            ids = {i for i, _ in found if i is not None}
+            eid = ids.pop() if len(ids) == 1 else eid
+            name = " / ".join(sorted({n for _, n in found if n})) or None
+        return {"key": key, "id": eid, "name": name, "variables": variables}
+
+    def order(e: dict):
+        return (e["id"] is None, e["id"] or 0, (e["name"] or "").lower())
+
+    parents: dict[str, dict] = {}
     for r in rows:
-        models = r.pop("model_names") or []
-        if r["name"] is None and lookup:
-            found = sorted({lookup[m][r["id"]] for m in models if m in lookup and r["id"] in lookup[m]})
-            r["name"] = " / ".join(found) or None
-    return rows
+        models = r["model_names"] or []
+        p = parents.get(r["pk"])
+        if p is None:
+            p = parents[r["pk"]] = entity(parent, r["pk"], r["p_id"], r["p_name"], models, [])
+            if child:
+                p["children"] = []
+        p["variables"] = sorted(set(p["variables"]) | set(r["variables"]))
+        if child:
+            p["children"].append(entity(child, r["ck"], r["c_id"], r["c_name"], models, r["variables"]))
+    result = sorted(parents.values(), key=order)
+    for p in result:
+        if child:
+            p["children"].sort(key=order)
+    return result
 
 
 def list_raster_layers(settings: Settings | None = None) -> list[dict]:
@@ -318,9 +475,14 @@ def list_raster_layers(settings: Settings | None = None) -> list[dict]:
             """
             SELECT scenario, any_value(model) AS model, any_value(model_name) AS model_name,
                    domain, variable,
+                   -- The time-series label where the same variable exists there
+                   -- (e.g. ECOIND "Total B (ECOIND)"; its slug alone loses the case).
+                   (SELECT any_value(d.label) FROM catalog_datasets d
+                    WHERE d.variable = catalog_rasters.variable AND d.freq = 'monthly') AS label,
                    count(DISTINCT coalesce(CAST(group_id AS VARCHAR), group_name)) AS n_groups,
                    count(DISTINCT coalesce(CAST(fleet_id AS VARCHAR), fleet_name)) AS n_fleets,
-                   min(year) AS year_min, max(year) AS year_max, count(*) AS n_rasters
+                   min(year) AS year_min, max(year) AS year_max, count(*) AS n_rasters,
+                   count(DISTINCT run_id) AS n_runs
             FROM catalog_rasters
             GROUP BY scenario, domain, variable
             ORDER BY scenario, domain, variable
@@ -336,8 +498,10 @@ def list_rasters(
     group: str | None = None,
     fleet: str | None = None,
     year: int | None = None,
+    run: str | None = None,
 ) -> list[dict]:
-    """Raster index rows for one (scenario, variable), optionally narrowed further."""
+    """Raster index rows for one (scenario, variable), optionally narrowed further
+    -- for Monte Carlo maps (several runs, see ``list_raster_runs``) to one run."""
     settings = settings or get_settings()
     clauses = ["scenario = ?", "variable = ?"]
     params: list = [scenario, variable]
@@ -350,11 +514,45 @@ def list_rasters(
     if year is not None:
         clauses.append("year = ?")
         params.append(year)
+    if run is not None:
+        clauses.append("run_id = ?")
+        params.append(run)
     with _ro(settings) as con:
         return _rows(
             con,
             "SELECT * FROM catalog_rasters WHERE " + " AND ".join(clauses) + " ORDER BY year",
             params,
+        )
+
+
+def list_raster_runs(settings: Settings | None = None, *, scenario: str, variable: str) -> list[dict]:
+    """The Monte Carlo runs one (scenario, variable)'s maps exist for --
+    ``{run_id, kind, label}``, the baseline or main run first (see catalog/runs.py);
+    empty for ordinary single-run maps."""
+    settings = settings or get_settings()
+    with _ro(settings) as con:
+        rows = _rows(
+            con,
+            f"SELECT DISTINCT run_id, {RUN_KIND_SQL} AS kind FROM catalog_rasters "
+            "WHERE scenario = ? AND variable = ? AND run_id IS NOT NULL",
+            [scenario, variable],
+        )
+    rank = {"baseline": 0, "main": 1, "sample": 2}
+    for r in rows:
+        r["label"] = run_label(r["run_id"])
+        r["scenario"] = scenario
+    return sorted(rows, key=lambda r: (rank.get(r["kind"], 3), r["label"]))
+
+
+def raster_sources(scenario: str, domain: str = "output", settings: Settings | None = None) -> list[dict]:
+    """``{source_path, source_crs_wkt}`` of every map of one scenario -- to find
+    the grid its maps share (regions/datagrid.py)."""
+    settings = settings or get_settings()
+    with _ro(settings) as con:
+        return _rows(
+            con,
+            "SELECT DISTINCT source_path, source_crs_wkt FROM catalog_rasters WHERE scenario = ? AND domain = ?",
+            [scenario, domain],
         )
 
 

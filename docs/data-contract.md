@@ -116,8 +116,13 @@ job_<id>/
                         # ślad "kto/co/kiedy" do przyszłych zestawień użycia per profil
   params.json          # parametry formularza danej analizy
   data/
-    timeseries.parquet # JUŻ przefiltrowane wg selekcji (schemat powyżej)
-    spatial/           # (analizy przestrzenne) COG-i + raster_index.csv
+    timeseries.parquet # JUŻ przefiltrowane wg selekcji (schemat powyżej); brak w analizach map
+    zonal.parquet      # (analizy map w obszarach) statystyki per obszar x grupa/flota x rok
+    zonal.csv          #   to samo jako CSV (gdy w R nie ma pakietu arrow)
+    areas/             # (analizy map w obszarach) obszary na siatce modelu
+      areas.csv        #   id, name, cells, area_km2, mask_file
+      areas.geojson    #   kontury (lon/lat, po krawędziach komórek)
+      <id>_mask.tif    #   maska 0/1 obszaru, GeoTIFF na siatce i w CRS modelu
     dictionaries/      # scenarios.csv
   out/                 # <-- skrypt zapisuje tu wyniki
 ```
@@ -136,14 +141,63 @@ job_<id>/
   "created_at": "2026-08-28T09:15:00.123456+00:00"
 }
 ```
-`group_ids` / `fleet_ids` to numery grup funkcjonalnych / flot EwE (kroki 5 i 6 w UI) —
-większość plików wynikowych EwE (np. `catch_annual.csv`, nagłówek `year\group,1,2,…`;
-`catch-fleet-group_annual.csv`, `year,fleet,group,value`) zapisuje tylko numery, bez nazw,
-a numeracja jest osobna dla każdego modelu (`docs/ewe-data-formats.md` §5). Puste pole =
-bez filtra. Starsze pola `groups` / `fleets` (nazwy) nadal działają, ale dla takich danych
-niczego nie dopasują.
+Od 30.10 UI (Explore time series) zapisuje wybór **per zmienna**, jak Results Extractor EwE
+(UG s.128–129): `variables` to obiekty `{variable, domain, scenarios, picks}`, gdzie `picks`
+to wybór z sekcji („boxa”) zmiennej (krok 5) — `[[grupa]]`/`[[flota]]` w sekcjach
+jednopoziomowych albo `[[rodzic, partner], …]` w sekcjach „attached” (np. ofiara → drapieżnik
+dla PredationMortality). Klucz to numer EwE jako tekst albo — gdy plik podaje tylko nazwę
+(predation/prey) — nazwa małymi literami; patrz `GET /catalog/selection` i
+`catalog/categories.py` `CATEGORY_DIMS`. Brak `picks` = bez filtra (wskaźniki, statystyki
+dopasowania, drivery).
+
+Starsze pola globalne `group_ids` / `fleet_ids` (numery EwE) oraz `groups` / `fleets` (nazwy)
+nadal filtrują wszystkie zmienne manifestu — większość plików wynikowych EwE (np.
+`catch_annual.csv`, nagłówek `year\group,1,2,…`) zapisuje tylko numery, a numeracja jest osobna
+dla każdego modelu (`docs/ewe-data-formats.md` §5).
+
+Same dane (bez R) pobiera się przez `POST /timeseries/export` („Save results”): ZIP z jednym
+CSV na zmienną + README.txt + selection.json (`backend/ecosim/export/timeseries_csv.py`).
 `analysis_id`/`created_at` są dopisywane automatycznie przez `prepare_job()` (nie są częścią
 selekcji z UI) — nigdy nie trzeba ich podawać przy tworzeniu manifestu.
+
+### Obszary i mapy (manifest `spatial` + `areas`, od 27.11)
+
+Analizy uruchamiane z widoku **Spatial data** (`requires.domain: spatial`) dostają zmienną
+Ecospace i zaznaczone obszary zamiast koszyka szeregów czasowych:
+
+```json
+{
+  "spatial": {
+    "scenario": "ssp1_a002", "variable": "ecoind_total_b",
+    "entities": [], "year_from": 2004, "year_to": 2013,
+    "run": "RU_SSP1_Calib"
+  },
+  "areas": [
+    { "id": "aoi_1", "name": "SD 25+26 ∩ Natura 2000",
+      "area": { "groups": [
+        [ { "kind": "regions", "layer": "ices_subdivisions", "codes": ["25", "26"] } ],
+        [ { "kind": "regions", "layer": "03_natura2000_2024" } ] ] } }
+  ]
+}
+```
+
+- `area` to definicja obszaru z `backend/ecosim/regions/masks.py`: w grupie suma (OR), między
+  grupami przecięcie (AND); elementy `regions` (warstwa paczki obszarów referencyjnych,
+  wybrane kody albo cała maska 0/1) i `drawn` (narysowany wielokąt, GeoJSON lon/lat).
+  Komórka należy do obszaru, gdy jej środek jest w środku.
+- `entities` — nazwy grup/flot (pusta lista = wszystkie); `run` — przebieg Monte Carlo
+  (`run_id`), `"all"` = przebieg bazowy + 5./95. percentyl po próbkach, brak = bazowy.
+- Statystyki liczy framework (`regions/zonal.py`), nie R: `prepare_job()` zapisuje
+  `data/zonal.parquet` z kolumnami `area_id, area_name, area, side, entity, year, mean,
+  min, max, n_cells, coverage` (+ `total` dla zmiennych gęstościowych: biomass, catch,
+  discards, effort; + `mean_p05/mean_p95/total_p05/total_p95/n_samples` przy `run: "all"`),
+  oraz `scenario, variable, semantics` (`density` / `fraction` / `indicator`).
+  `mean` = średnia ważona powierzchnią komórek, które mają wartość; `total` = Σ wartość ×
+  powierzchnia komórki (km²); `coverage` = udział komórek obszaru z wartością w mapie.
+- `requires.outside: true` dodaje dla każdego obszaru resztę siatki: wiersze z
+  `side = "outside"`, `area_id = "<id>__outside"`, `area` = id obszaru.
+- Mapy tylko w chmurze nie są pobierane w trakcie analizy — błąd z prośbą, by najpierw
+  policzyć obszary w panelu „Area summary” (on pobiera mapy, z podanym kosztem).
 
 ## Wyniki: katalog `out/` + `result.json`
 
@@ -193,6 +247,15 @@ ecosim_emit_table(summarise(ts), title = "Podsumowanie")
 
 Emitery zapisują artefakt do `out/` **i** dopisują wpis do `result.json`.
 
+Analizy map w obszarach:
+
+```r
+z     <- ecosim_load_zonal()          # data/zonal.parquet (kolumny opisane wyżej)
+areas <- ecosim_load_areas()          # id, name, cells, area_km2, mask_file
+shp   <- ecosim_area_outlines()       # obiekt sf (jeśli jest pakiet sf), inaczej ścieżka GeoJSON
+m     <- ecosim_area_mask("aoi_1")    # SpatRaster 0/1 (wymaga pakietu terra)
+```
+
 ## Rejestracja analizy (`analysis.yaml`)
 
 Każda analiza to folder w `rkit/analyses/<id>/` z `analysis.yaml` + `entry.R`:
@@ -207,6 +270,13 @@ params:
   - { key: relative,  type: bool,   default: false, label: "Względem roku bazowego" }
 entry: entry.R
 ```
+
+Typy parametrów: `number`, `bool`, `choice` (z listą `choices`, np.
+`{ key: statistic, type: choice, choices: [mean, total], default: mean }`).
+`requires.domain: spatial` = analiza uruchamiana z widoku Spatial data (manifest `spatial` +
+`areas`); `requires.areas: true` = wymaga zaznaczonego obszaru; `requires.outside: true` =
+także statystyki reszty siatki. Wtyczki: `spatial_aoi_summary` (trend i zmiana w obszarach),
+`spatial_inside_outside` (wewnątrz vs na zewnątrz, test par po latach).
 
 Frontend automatycznie generuje formularz z sekcji `params`. Backend przygotowuje
 sandbox z danymi spełniającymi `requires`, woła `Rscript entry.R`, po czym czyta

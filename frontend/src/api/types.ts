@@ -73,18 +73,37 @@ export interface TimeseriesRow {
   value: number | null;
   /** Biomass rows: the group's Ecopath biomass B, the baseline Ecosim starts from (null if unknown). */
   baseline?: number | null;
+  /** Monte Carlo summary rows: `value` is the baseline run's, these the samples'
+   * 5th/95th percentile and how many samples there were. */
+  p05?: number | null;
+  p95?: number | null;
+  n_samples?: number;
 }
 
-/** A functional group or fleet present in the data (GET /catalog/groups, /catalog/fleets).
- * EwE numbers both per model; most output files carry only that number, so `name` is
- * usually null (no id->name dictionary exists -- see docs/ewe-data-formats.md §5). */
-export type DimensionKind = "group" | "fleet";
+/** One Monte Carlo / Ecosampler run of a scenario (GET /catalog/runs). */
+export interface RunEntry {
+  scenario: string;
+  run_id: string;
+  kind: "baseline" | "main" | "sample";
+  label: string;
+}
 
-export interface DimensionOption {
-  id: number;
+/** One entry of a Results-Extractor box's selection window (GET /catalog/selection):
+ * a functional group or fleet present in the data of the box's checked variables.
+ * `key` is what `picks` take; `id`/`name` are EwE's number and name -- most output
+ * files carry only the number, predation/prey files only the name, and each is
+ * completed from the model's Ecopath output where it is loaded. */
+export interface SelectionEntity {
+  key: string;
+  id: number | null;
   name: string | null;
   variables: string[]; // which of the requested variables contain it
+  /** "Attached" boxes: this entity's partners (e.g. a predator's prey). */
+  children?: SelectionEntity[];
 }
+
+/** A box selection as /timeseries takes it: [parent] or [parent, partner] keys. */
+export type Picks = string[][];
 
 export interface TimeseriesResponse {
   count: number;
@@ -104,6 +123,10 @@ export interface RasterLayer {
   year_min: number;
   year_max: number;
   n_rasters: number;
+  /** Monte Carlo maps: how many runs (0 for ordinary maps). */
+  n_runs: number;
+  /** The same variable's time-series label, if it has one (e.g. "Total B (ECOIND)"). */
+  label: string | null;
 }
 
 export interface RasterEntry {
@@ -118,13 +141,16 @@ export interface RasterEntry {
   fleet_id: number | null;
   fleet_name: string | null;
   year: number;
+  run_id: string | null;
 }
 
 export interface AnalysisParam {
   key: string;
-  type: "number" | "bool" | string;
+  type: "number" | "bool" | "choice" | string;
   default: unknown;
   label: string | null;
+  /** type "choice": the allowed values. */
+  choices?: string[] | null;
 }
 
 export interface AnalysisSpec {
@@ -240,6 +266,8 @@ export interface BrowseEntry {
   name: string;
   path: string;
   looks_like_source: boolean;
+  /** A .zip file -- listed only when browsing with ``zip`` (region packs). */
+  is_file?: boolean;
 }
 
 export interface BrowseResult {
@@ -247,4 +275,169 @@ export interface BrowseResult {
   parent: string | null;
   entries: BrowseEntry[];
   is_drives_list: boolean;
+}
+
+/** A region layer (ICES subdivisions/rectangles, a management mask) on one
+ * model grid -- backend regions/store.py. */
+export interface RegionClass {
+  id: number;
+  code: string;
+  label: string;
+  cells: number;
+}
+
+export interface RegionGrid {
+  ncols: number;
+  nrows: number;
+  xll: number;
+  yll: number;
+  cellsize: number;
+}
+
+export interface RegionLayer {
+  id: string;
+  pack_id: string;
+  /** Grid-independent identity, e.g. "ices_subdivisions" -- what a saved area refers to. */
+  key: string;
+  kind: "regions" | "mask";
+  title: string;
+  category: "ICES" | "Management" | "Other";
+  grid: RegionGrid;
+  crs: string;
+  classes: RegionClass[];
+  details: Record<string, string>;
+}
+
+export interface RegionPack {
+  id: string;
+  name: string;
+  source_path: string;
+  imported_at: string;
+  warnings: string[];
+  layers: RegionLayer[];
+}
+
+/** One part of an area: picked regions of a layer (no codes = all of them, or a 0/1 mask), or a drawn polygon. */
+export type AreaItem =
+  | { kind: "regions"; layer: string; codes?: string[] }
+  | { kind: "drawn"; geojson: GeoJSON.FeatureCollection };
+
+/** Items in a group are joined (union); groups are intersected -- backend regions/masks.py. */
+export interface AreaDefinition {
+  groups: AreaItem[][];
+}
+
+export interface SavedArea {
+  id: string;
+  name: string;
+  area: AreaDefinition;
+}
+
+export interface AreaLibrary {
+  areas: SavedArea[];
+  selected: string[];
+  /** False until first written -- areas from the old browser storage are moved in then. */
+  saved: boolean;
+}
+
+/** How the model's grid was matched to the loaded reference areas. */
+export interface DataGridInfo {
+  status: "matched" | "no_match" | "unknown";
+  message: string | null;
+  grid: RegionGrid | null;
+  crs: string | null;
+}
+
+export interface RegionLayersForGrid {
+  grid: DataGridInfo | null;
+  layers: RegionLayer[];
+}
+
+export interface AreaSummary {
+  cells: number;
+  area_km2: number;
+  geojson?: GeoJSON.FeatureCollection;
+  grid: DataGridInfo;
+}
+
+export interface AuthStatus {
+  /** Whether this server needs signing in. */
+  enabled: boolean;
+  user: string | null;
+  /** "admin" can change data sources and reference areas; "tester" only uses them. */
+  role: "admin" | "tester" | null;
+}
+
+/** One area x group/fleet x year of a zonal summary (backend regions/zonal.py). */
+export interface ZonalRow {
+  area_id: string;
+  entity: string | null;
+  year: number;
+  /** Area-weighted mean over the area's cells that have a value. */
+  mean: number | null;
+  /** Sum of value x cell area (km²) -- only for densities (biomass, catch, effort...). */
+  total?: number | null;
+  min?: number | null;
+  max?: number | null;
+  n_cells: number;
+  /** Share of the area's cells that have a value in the model's map. */
+  coverage: number | null;
+  mean_p05?: number | null;
+  mean_p95?: number | null;
+  total_p05?: number | null;
+  total_p95?: number | null;
+  n_samples?: number;
+}
+
+export interface ZonalResult {
+  variable: string;
+  semantics: "density" | "fraction" | "indicator";
+  run: string | null;
+  areas: { id: string; name: string; cells: number; area_km2: number }[];
+  rows: ZonalRow[];
+  maps: number;
+  maps_missing: number;
+  problems?: string[];
+  cancelled?: boolean;
+}
+
+export interface ZonalCost {
+  maps: number;
+  maps_cached: number;
+  maps_to_read: number;
+  maps_to_download: number;
+  bytes_to_download: number;
+  seconds_estimate: number;
+  /** The sync app (e.g. OneDrive) the downloads need isn't running -- they would be left out. */
+  sync_app_missing: string | null;
+}
+
+export interface ZonalJob {
+  id: string;
+  status: "running" | "done" | "cancelled" | "error";
+  phase: "starting" | "downloading" | "reading" | "done";
+  done: number;
+  total: number;
+  /** The sync app stopped serving files; waiting for it to come back. */
+  paused: boolean;
+  error: string | null;
+  result: ZonalResult | null;
+}
+
+export type ZonalResponse =
+  | { status: "done"; result: ZonalResult }
+  | { status: "confirm"; cost: ZonalCost }
+  | { status: "running"; job: ZonalJob };
+
+export interface ZonalRequest {
+  scenario: string;
+  variable: string;
+  areas: SavedArea[];
+  domain?: string;
+  entities?: string[];
+  year_from?: number;
+  year_to?: number;
+  /** A run_id, "all" (Monte Carlo: baseline + 5-95% band) or omitted (the baseline run). */
+  run?: string;
+  start?: boolean;
 }

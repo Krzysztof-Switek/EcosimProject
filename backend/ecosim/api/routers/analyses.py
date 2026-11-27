@@ -1,17 +1,14 @@
 """Analysis plugin listing + run endpoints (Etap 3 — R analyses).
 
-Also: plain data export (no R involved) -- the same manifest that can drive an
-analysis can instead just be downloaded, for anyone who'd rather work in their
-own tool. See rows_for_manifest() in analyses/runner.py.
+The selected data itself is downloaded through ``POST /timeseries/export``.
 """
 
 from __future__ import annotations
 
-import io
+import os
 
-import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from ecosim.analyses import registry, runner
@@ -20,13 +17,15 @@ from ecosim.core.config import get_settings
 router = APIRouter(prefix="/analyses", tags=["analyses"])
 
 
+def r_disabled() -> bool:
+    """``ECOSIM_DISABLE_R=1`` turns R analyses off -- on a shared server until
+    running R safely is designed (an R script runs with the server's rights)."""
+    return os.environ.get("ECOSIM_DISABLE_R", "").lower() in ("1", "true", "yes")
+
+
 class RunRequest(BaseModel):
     manifest: dict = {}
     params: dict = {}
-
-
-class ExportRequest(BaseModel):
-    manifest: dict = {}
 
 
 def _public(spec: registry.AnalysisSpec) -> dict:
@@ -35,28 +34,19 @@ def _public(spec: registry.AnalysisSpec) -> dict:
 
 
 @router.get("")
-def list_analyses(variable: list[str] | None = Query(None)) -> list[dict]:
+def list_analyses(variable: list[str] | None = Query(None), context: str | None = None) -> list[dict]:
     """All registered analyses, or (with `variable` given) only the ones whose
     declared requirements are met by that set -- e.g. what a caller currently
-    has selected in the time-series basket."""
+    has selected in the time-series basket. ``context`` (timeseries / spatial)
+    keeps those run from that view. None when R is turned off."""
+    if r_disabled():
+        return []
     specs = registry.list_analyses()
+    if context:
+        specs = [s for s in specs if s.context == context]
     if variable:
         specs = [s for s in specs if s.is_compatible(set(variable))]
     return [_public(s) for s in specs]
-
-
-@router.post("/export")
-def export_data(body: ExportRequest) -> StreamingResponse:
-    """Download exactly what a manifest selects as CSV -- no R, no sandbox."""
-    rows = runner.rows_for_manifest(body.manifest)
-    buf = io.StringIO()
-    pd.DataFrame(rows).to_csv(buf, index=False)
-    buf.seek(0)
-    return StreamingResponse(
-        iter([buf.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=ecosim_export.csv"},
-    )
 
 
 @router.get("/{analysis_id}")
@@ -69,6 +59,8 @@ def get_analysis(analysis_id: str) -> dict:
 
 @router.post("/{analysis_id}/run")
 def run_analysis(analysis_id: str, body: RunRequest) -> dict:
+    if r_disabled():
+        raise HTTPException(status_code=403, detail="R analyses are turned off on this server.")
     spec = registry.get_analysis(analysis_id)
     if spec is None:
         raise HTTPException(status_code=404, detail="Analysis not found")

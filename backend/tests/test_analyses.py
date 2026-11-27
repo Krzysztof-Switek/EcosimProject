@@ -107,6 +107,7 @@ def test_prepare_job_empty_selection_raises_clear_error(store):
         runner.prepare_job(spec, _manifest(group_ids=[99]), {"smoothing": 3, "relative": False}, store)
     # No partially-materialized timeseries.parquet left behind for any job dir.
     assert not list(store.jobs_dir.glob("job_*/data/timeseries.parquet"))
+    assert not list(store.jobs_dir.glob("job_*"))  # the failed job dir is removed
 
 
 def test_run_job_missing_rscript_raises_clear_error(tmp_path, monkeypatch):

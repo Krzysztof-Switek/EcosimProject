@@ -15,9 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from ecosim import __version__
-from ecosim.api.routers import admin, analyses, catalog, sources, spatial, timeseries
+from ecosim.api.routers import admin, analyses, areas, auth, catalog, regions, sources, spatial, timeseries
 from ecosim.core.workspace import NoActiveDataSourceError, get_workspace_registry
-from ecosim.ingestion.activation import migrate_legacy_store_if_needed
+from ecosim.ingestion.activation import combine_and_rebuild, migrate_legacy_store_if_needed
 
 
 def create_app() -> FastAPI:
@@ -35,6 +35,21 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Signing in (core/auth.py): when set up, every call but these needs a
+    # session -- including /docs and /openapi.json.
+    @app.middleware("http")
+    async def _require_session(request: Request, call_next):
+        from ecosim.core import auth as auth_core
+
+        if request.method == "OPTIONS" or request.url.path in _OPEN_PATHS or not auth_core.enabled():
+            return await call_next(request)
+        account = auth.current_account(request)
+        if account is None:
+            return JSONResponse(status_code=401, content={"detail": "Sign in first."})
+        if account.role != "admin" and auth_core.admin_only(request.method, request.url.path):
+            return JSONResponse(status_code=403, content={"detail": "Only the administrator can do this."})
+        return await call_next(request)
+
     @app.on_event("startup")
     def _migrate_store() -> None:
         # One-time, idempotent move from the old single-global-store layout
@@ -46,6 +61,13 @@ def create_app() -> FastAPI:
             migrate_legacy_store_if_needed(get_workspace_registry())
         except Exception:  # noqa: BLE001 -- best-effort, must never block startup
             logging.getLogger("ecosim.activation").exception("Legacy store migration failed; continuing without it.")
+        # Rebuild the catalog from the active sources' cached Parquet (no raw
+        # files read), so a change in the catalog's own rules -- labels,
+        # counts, Results-Extractor categories -- applies without re-activating.
+        try:
+            combine_and_rebuild(get_workspace_registry())
+        except Exception:  # noqa: BLE001 -- best-effort, the previous catalog stays usable
+            logging.getLogger("ecosim.activation").exception("Catalog rebuild failed; keeping the previous one.")
 
     @app.on_event("startup")
     def _identify_models() -> None:
@@ -78,7 +100,13 @@ def create_app() -> FastAPI:
     app.include_router(analyses.router)
     app.include_router(admin.router)
     app.include_router(sources.router)
+    app.include_router(regions.router)
+    app.include_router(areas.router)
+    app.include_router(auth.router)
     return app
+
+
+_OPEN_PATHS = {"/health", "/auth/status", "/auth/login", "/auth/logout"}
 
 
 app = create_app()

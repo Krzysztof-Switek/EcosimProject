@@ -244,10 +244,16 @@ def _scan_warnings(report: IngestReport, spatial_report: SpatialIndexReport) -> 
             f"{spatial_report.unrecognized_files:,} .asc map file(s) were not loaded: their names "
             f"match no map format this app recognises yet (e.g. {examples})."
         )
+    if spatial_report.ecoind_map_tables:
+        out.append(
+            f"{spatial_report.ecoind_map_tables:,} ECOIND map table(s) (biodiv_ind_Ecospace<step>.csv) were "
+            "not loaded on purpose: they hold the same indicators and time steps as the "
+            "biodiv_ind_*.asc maps, which are loaded."
+        )
     if report.skipped_unsupported:
         out.append(
             f"{report.skipped_unsupported:,} CSV file(s) were skipped: a known EwE export shape "
-            "this app does not load yet (Ecospace maps saved as CSV, or region/age-structure tables)."
+            "this app does not load (Ecospace maps saved as CSV -- the same maps as the .asc files)."
         )
     if report.errors:
         out.append(f"{len(report.errors):,} CSV file(s) could not be loaded. First: {report.errors[0]}")

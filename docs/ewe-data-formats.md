@@ -294,6 +294,37 @@ odczuwają. **Druga tura (28.08):** cały mechanizm (plik, `group_map.py`, powi�
 API) usunięty z rdzenia całkowicie, nie tylko uczyniony opcjonalnym — patrz sekcja
 "Rozjazdy" niżej i `docs/Plans and TO_DO lists/28.08_session_summary.md`.
 
+### Okno Results Extractora → krok „Explore time series” (30.10)
+
+Przeczytane: UG PDF s.141–145 (druk. 127–131) + rysunki okna (Figure 1 i 2, wyciągnięte z
+PDF), PM PDF s.146–148 (druk. 135–137, tutorial). Okno ma **7 boxów** checkboxów:
+„Functional groups only” (Biomass, Biomass integrated, Fishing mortality, Catch, Predation
+mortality), „Predators with attached prey” (Consumption, Diet Proportions), „Prey with
+attached predators” (Predation mortality per predator), „Fleets only” (Effort, Value per
+fleet), „Fleets with attached prey” (Fishing mortality (Fleet to Prey), Catch per fleet),
+„Fitting statistics” (Residuals, Sum of squares), „Indicators” (13 tabel). Pod spodem:
+Excel/.CSV, **Yearly**, All options, Save Results.
+
+Reguły z tekstu, które przenieśliśmy:
+- „Change Selection” jest **per box**: wybór „will apply to all other checked options within
+  that group” (UG s.129).
+- Okno wyboru = lista dostępnych → wybrane (Figure 2); boxy „attached” mają **trzy kolumny**:
+  „you first select which predators … and then for each predator you have selected, you select
+  which prey” (UG s.129) — wybór partnerów jest **osobny dla każdego rodzica**.
+- „Yearly” = „calculating the mean over the year” wartości miesięcznych (UG s.131).
+- „Biomass integrated” (pole pod krzywą B−B₀) — **nie** budowane (nie było prośby).
+
+Implementacja: kategorie = boxy (`catalog/categories.py` `CATEGORY_ORDER` z tytułami jak w
+oknie, `CATEGORY_DIMS` = wymiar rodzica i partnera), krok 5 w UI = okno wyboru każdego boxu z
+zaznaczonymi zmiennymi (`GET /catalog/selection`, `picks` w `POST /timeseries`), „Save results”
+= `POST /timeseries/export` (CSV per zmienna w ZIP, kolumny nazwane rolą: `prey`/`predator`/
+`fleet`/`group`; Yearly z `n_months`). W plikach predation/prey ofiara/drapieżnik są podane
+**tylko nazwą** (nazwa gatunku z nazwy pliku małymi literami) — numer i pisownia uzupełniane z
+Ecopath `basic_estimates.csv` tego samego modelu (dopasowanie bez rozróżniania wielkości liter;
+na FuMa_SSP1_SCEN dopasowane wszystkie 20 + 20 nazw). Dotąd te zmienne miały w katalogu 0 grup
+(liczone były tylko numery), więc nie dało się nic wybrać i wykres rysował 400 linii — teraz
+grupy liczone są „numer albo nazwa”.
+
 ### Struktura katalogów wyjściowych EwE — nie ma jednej, ponownie zweryfikowane 27.08
 
 Po naprawie wymogu słownika okazało się, że **walidator dalej odrzucał ten sam prawdziwy
@@ -529,6 +560,65 @@ kształtem niż wyniki per-przebieg.
 brak folderów `Sample_*`, `MonteCarloTrials.csv`, ani nic podobnego) — więc to wszystko jest
 materiał projektowy na przyszłość, nie coś do naprawienia teraz.
 
+### Realne dane Ecosampler: `RU_SSP1_Calib` (sprawdzone 30.10, nazwy + pliki lokalne)
+
+Doczytane: UG „Addressing Uncertainty” (PDF s.191–195, druk. 177–181), „Ecospace Output”
+(PDF s.196–199, druk. 182–185), „Ecological indicators: EcoIND” (PDF s.243–245, druk.
+229–231). Ecosampler „replays these samples through all of the EwE modules and any loaded
+plug-in … Ecosim, … Ecospace, and plug-ins such as … Ecological Indicators” (UG s.180), a
+wynik przedstawia się jako pasmo **5.–95. percentyla** z próbek wokół przebiegu (Fig. 10).
+ECOIND „is applicable to Ecopath, Ecosim and Ecospace models” i jest połączony z Monte Carlo
+(UG s.229). Żaden rozdział nie opisuje układu plików — poniżej to, co jest w danych.
+
+Struktura: `RU_SSP1_Calib/Sample_baseline` + **306× `Sample_NNNNN`**, w każdej próbce:
+
+| Plik | Moduł (nagłówek) | Kształt | Dziś |
+|---|---|---|---|
+| `basic_estimates.csv`, `ecopath_stats.csv`, `biodiv_ind_Ecopath.csv` | ecopath | tabela / `"wskaźnik",wartość` | identyfikacja (nazwy grup, B₀) |
+| `ecosim_SSP1_A002/<zmienna>_{annual,monthly}.csv` | ecosim | zwykłe CSV Ecosim | **wczytane, z `run_id`** |
+| `ecosim_SSP1_A002/biodiv_ind_Ecosim.csv` | ecosim | `Time` (krok miesięczny 1–120) × ~43 wskaźniki ECOIND, bez sekcji `Data,` | pominięte |
+| `SSP1_A002/biodiv_ind_<wskaźnik>-NNNN.asc` (+`.prj`) | Ecospace (bez nagłówka) | mapa ESRI ASCII, 39 wskaźników × kroki 12, 24 … 120 (co rok) | **odrzucone** (nazwa nieznana) |
+| `SSP1_A002/biodiv_ind_Ecospace<krok>.csv` | Ecospace | `Column,Row,Lon,Lat` + kolumna na wskaźnik, wiersz na aktywną komórkę (14 985) — **te same mapy co `.asc`, zapisane jako CSV** | pominięte |
+| `SSP1_A002/RegionAgeStructure/AgeStructure_<stado>_Region_All_{Number,Weight}.csv` | ecospace | `Max Age`, potem `Timestep, Region, <grupa>_<wiek miesięcznie>…`; wiersz 0 = „Ecosim Base Values” | pominięte |
+
+**Wdrożone 30.10** (kolumna „Dziś” powyżej to stan sprzed zmian):
+
+1. **Przebiegi** (`catalog/runs.py`). Przebieg = folder `Sample_N` (`run_roots`). Jedna
+   próbka pisze do kilku folderów (`ecosim_*`, `<scenariusz Ecospace>`,
+   `RegionAgeStructure`), więc wcześniej liczyła się 2 razy (614 zamiast 308). Wszystko poza
+   próbkami, w folderze je zawierającym, to przebieg główny. `query_timeseries` bez `run`
+   zwraca dla scenariusza z przebiegami wartość z `Sample_baseline` (dalej przebieg główny,
+   dalej mediana) plus `p05`/`p95`/`n_samples` z próbek — jak Fig. 10 (UG s.180). Z `run` —
+   jeden przebieg. Tabela `catalog_runs`, `GET /catalog/runs`, `GET /spatial/runs`.
+2. **Serie ECOIND** (`parsers/ecoind_csv.py`): zmienne `ecoind_<slug>` w „Indicators”,
+   miesięczne z pliku i roczne jako średnia z miesięcy (jak „Yearly” Results Extractora, UG
+   s.131 — EwE nie zapisuje rocznej tabeli ECOIND).
+3. **Mapy ECOIND** (`asc_grid._ECOIND_RE`): te same zmienne `ecoind_<slug>`, bez grupy.
+   Folder nie ma `Ecospace RunInfo.txt` — tożsamość (scenariusz, StartYear, WKT) z nagłówka
+   lokalnych tabel `RegionAgeStructure` (`_ecospace_header_nearby`, tylko pliki lokalne,
+   najpierw pierwsza linia). Nie liczą się do pobrania z góry (`file_access._is_needed`);
+   mapa tylko w chmurze pobiera się pojedynczo przy wyświetleniu (`materialize_raster`).
+4. **`biodiv_ind_Ecospace<krok>.csv`** — świadomie niewczytywane, z komunikatem skanu: te same
+   39 wskaźników i kroki co mapy `.asc` (w nazwach map „/” → „ - ”; slugi wychodzą te same).
+   Zgodności wartości nie sprawdzono — mapy są tylko w chmurze.
+5. **Struktura wiekowa** (`parsers/age_structure_csv.py`): `age_structure_number` /
+   `age_structure_weight` („numbers-at-age and weight-at-age”, UG s.174), grupa stada jako
+   `group`, wiek w miesiącach jako partner (`partner_id`), sekcja „Age structure (Ecospace)”.
+   Wiersz „Ecosim Base Values” (krok 0) pominięty — to stan początkowy, nie krok czasowy.
+   Region 0 = pliki `Region_All`; inny region dostałby `_region_<n>`.
+
+**W tych danych** próbki nie różnią się w Ecopath ani Ecosim (pliki identyczne poza datą w
+nagłówku — pasmo na wykresach serii ma zerową szerokość); różnią się wyniki Ecospace (tabele
+`biodiv_ind_Ecospace*.csv` mają inne sumy kontrolne). Manual tego nie wyjaśnia, a wręcz
+mówi, że Monte Carlo i Ecosampler „are not yet able to access Ecospace parameters” (UG
+s.178) — źródło tej zmienności trzeba ustalić z autorem danych.
+
+Uwagi: `Lon/Lat` w CSV i nagłówki map są w metrach (jak w FuMa, §3 — deklarowany WGS84 jest
+błędny, układ ustawia użytkownik). Mapy `.asc` są **tylko w chmurze** (≈336 KB każda,
+119 340 plików ≈ **40 GB**) — indeksować po nazwie, pobierać leniwie. Wczytane szeregi
+Ecosim mają `run_id`, ale zapytania i wykresy go ignorują: dla jednego roku i grupy wraca
+308 wartości, które wykres nadpisuje jedna drugą.
+
 ---
 
 ## 5. Numerowanie grup i flot
@@ -662,3 +752,33 @@ numeracja grup jest osobna dla każdego modelu, PM s.270):
 Kod: `ingestion/model_origin.py` (zbieranie, `IDENTIFY_VERSION` = 3), `catalog/service.py`
 (`ecopath_group_names`, `ecopath_baseline_biomass`, kolumna `baseline` w wierszach szeregów
 czasowych). Testy: `test_model_origin.py`, `test_dimension_selection.py`.
+
+## 8. Regiony Ecospace i mapy obszarów ICES / zarządzania — zweryfikowane 26.11
+
+**Manual:** Ecospace potrafi podsumować wyniki według regionów, wczytanych jako mapa w
+warstwie „Regions” (Ecospace → Input → Maps). „Note that a given cell can at most belong to
+one region. The program then summarizes the output by region as well.” (UG s.198 PDF /
+s.184 druk, rozdział „Ecospace Output”). W standardowym oknie Define regions EwE 6.7 limit
+wynosi 100 regionów (źródło: `Instrukcja.txt` w paczce, nie manual).
+
+**Paczki `docs/Mapy_ICES/*.zip`** (przygotowane do EwE, nie przez EwE): rastry ESRI ASCII
+z `.prj`. Wartością komórki jest ID regionu, lokalne dla danej mapy. Legenda jest w CSV
+(separator `;`, kody ICES czytać jako tekst ze względu na `28.1`/`28.2`). Mapy podobszarów
+mają ID 0 = woda bez regionu. Maski zarządzania mają 1 = w warstwie, 0 = woda poza
+warstwą. We wszystkich −9999 = ląd. Komórkę przypisano według jej środka. Są dwie siatki:
+Baltic (675×374, EPSG:4326) i CentralBaltic (225×219, 4 km, EPSG:3035). Foldery
+`Prostokaty_limit_100` są tylko obejściem limitu 100 regionów w EwE.
+
+**Dopasowanie do naszych danych (sprawdzone na plikach lokalnych, komórka po komórce):**
+- `RU_SSP1` (mapa `EcospaceMapBiomass-*.asc`) i `RU_SSP1_Calib` (mapa ECOIND
+  `biodiv_ind_*.asc`) mają nagłówek identyczny z **CentralBaltic** (`ncols 225, nrows
+  219, xll 4535378, yll 3432716, cellsize 4000`). Siatki Baltic nie używa żadne nasze
+  źródło.
+- Maska wody w mapach ICES to `głębokość > 0` z `CentralBaltic_ewe_depth.asc`, czyli
+  **14 985** komórek. Mapy wyników modelu mają wartości tylko w **13 523** z nich, a
+  wszystkie te komórki leżą w wodzie ICES. Pozostałe **1 462** komórki są wodą (głębokość
+  6–117 m), ale nie mają wyniku (NoData w `.asc`, pusta wartość w
+  `biodiv_ind_Ecospace<krok>.csv`, który ma 14 985 wierszy). Wniosek dla statystyki
+  strefowej: liczyć tylko z komórek, które mają wartość, i podawać obok pokrycie (komórki
+  z danymi / komórki obszaru). Dlaczego EwE nie podaje wyniku dla tych komórek, manual nie
+  wyjaśnia; do ustalenia z autorem modelu, jeśli będzie istotne.
