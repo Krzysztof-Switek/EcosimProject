@@ -14,26 +14,7 @@ import {
   uniqueName,
 } from "./areaModel";
 
-/** Where areas were kept before they moved into the profile (moved once, then removed). */
-const OLD_STORAGE_KEY = "ecosim.aois.v2";
 const SAVE_DELAY_MS = 400;
-
-function oldStoredAreas(): { areas: SavedArea[]; selected: string[] } | null {
-  try {
-    const raw = localStorage.getItem(OLD_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as {
-      aois?: { id: string; name: string; geojson: GeoJSON.FeatureCollection }[];
-      selectedAoiIds?: string[];
-      activeId?: string | null;
-    };
-    const areas = (parsed.aois ?? []).map((a) => ({ id: a.id, name: a.name, area: drawnArea(a.geojson) }));
-    const selected = parsed.selectedAoiIds ?? (parsed.activeId ? [parsed.activeId] : []);
-    return { areas, selected };
-  } catch {
-    return null;
-  }
-}
 
 export interface AreaLibraryState {
   areas: SavedArea[];
@@ -60,18 +41,10 @@ export function useAreaLibrary(): AreaLibraryState {
     let cancelled = false;
     api
       .areaLibrary()
-      .then(async (lib) => {
+      .then((lib) => {
         if (cancelled) return;
-        const old = lib.saved ? null : oldStoredAreas();
-        if (old && old.areas.length > 0) {
-          await api.saveAreaLibrary(old.areas, old.selected);
-          setAreas(old.areas);
-          setSelected(old.selected);
-        } else {
-          setAreas(lib.areas);
-          setSelected(lib.selected);
-        }
-        localStorage.removeItem(OLD_STORAGE_KEY);
+        setAreas(lib.areas);
+        setSelected(lib.selected);
         setLoaded(true);
       })
       .catch((err: Error) => !cancelled && setError(`Could not load your saved areas: ${err.message}`));
@@ -129,7 +102,7 @@ export function useAreaLibrary(): AreaLibraryState {
   };
 }
 
-export interface AreaShape {
+interface AreaShape {
   id: string;
   name: string;
   geojson: GeoJSON.FeatureCollection;

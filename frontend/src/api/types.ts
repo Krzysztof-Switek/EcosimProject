@@ -336,8 +336,6 @@ export interface SavedArea {
 export interface AreaLibrary {
   areas: SavedArea[];
   selected: string[];
-  /** False until first written -- areas from the old browser storage are moved in then. */
-  saved: boolean;
 }
 
 /** How the model's grid was matched to the loaded reference areas. */

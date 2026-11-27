@@ -5,7 +5,7 @@ import type { AuthStatus } from "../../api/types";
 const AuthContext = createContext<{ status: AuthStatus; signOut: () => void } | null>(null);
 
 /** Who is signed in, and how to sign out -- null where signing in isn't set up. */
-export function useAuth() {
+function useAuth() {
   return useContext(AuthContext);
 }
 

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from ecosim.regions import zonal
-from test_regions import SD, SUBDIVISIONS, _area, _write_asc, imported  # noqa: F401 -- fixture
+from regions_helpers import SD, SUBDIVISIONS, _area, _write_asc
 
 
 @pytest.fixture(autouse=True)

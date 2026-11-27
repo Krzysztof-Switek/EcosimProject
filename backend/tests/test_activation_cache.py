@@ -13,15 +13,13 @@ Fully synthetic (no dependency on any real dataset), same fixture pattern as
 from __future__ import annotations
 
 import duckdb
-import pandas as pd
 import pytest
 
 rasterio = pytest.importorskip("rasterio")
 
-from ecosim.core.config import Settings, settings_for_single_source, source_cache_dir
+from ecosim.core.config import Settings, source_cache_dir
 from ecosim.core.workspace import WorkspaceRegistry
 from ecosim.ingestion.activation import (
-    ActivationError,
     activate_source,
     combine_and_rebuild,
     remove_source_and_rebuild,

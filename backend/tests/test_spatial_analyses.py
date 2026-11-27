@@ -13,7 +13,7 @@ import pytest
 from ecosim.analyses import registry, runner
 from ecosim.core.config import Settings
 from ecosim.regions import zonal
-from test_regions import SD, SUBDIVISIONS, _area, _write_asc, imported  # noqa: F401 -- fixture
+from regions_helpers import SD, SUBDIVISIONS, _area
 
 
 def test_complement_is_the_rest_of_the_grid(imported, tmp_path, monkeypatch):

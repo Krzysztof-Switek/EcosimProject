@@ -23,8 +23,6 @@ class Library(BaseModel):
 
 @router.get("")
 def get_areas() -> dict:
-    """``saved`` is False until the library was first written -- the browser
-    then moves areas saved by an earlier version (its own storage) here."""
     return load_library()
 
 

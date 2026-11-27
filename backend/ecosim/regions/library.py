@@ -26,9 +26,9 @@ def library_path() -> Path:
 def load_library() -> dict:
     path = library_path()
     if not path.exists():
-        return {"areas": [], "selected": [], "saved": False}
+        return {"areas": [], "selected": []}
     data = json.loads(path.read_text(encoding="utf-8"))
-    return {"areas": data.get("areas", []), "selected": data.get("selected", []), "saved": True}
+    return {"areas": data.get("areas", []), "selected": data.get("selected", [])}
 
 
 def save_library(areas: list[dict], selected: list[str]) -> dict:
@@ -40,4 +40,4 @@ def save_library(areas: list[dict], selected: list[str]) -> dict:
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)
-    return {**data, "saved": True}
+    return data

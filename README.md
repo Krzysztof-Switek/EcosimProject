@@ -28,7 +28,8 @@ DataEcosim/ ──(ingestia)──► data/ (timeseries Parquet + catalog DuckDB
 backend/    FastAPI + pipeline ingestii + katalog (Python, pakiet `ecosim`)
 frontend/   React SPA (Vite + TS) — przeglądarka katalogu, wykresy, mapy
 rkit/       Pakiet R `ecosimkit` + zarejestrowane analizy
-docs/       architecture.md, data-contract.md
+deploy/     Wdrożenie na serwer: nginx, systemd, .env, deploy.sh (instrukcja w deploy/README.md)
+docs/       architecture.md, data-contract.md, ewe-data-formats.md, plany
 data/       Kanoniczny store (generowany, w .gitignore)
 DataEcosim/ Surowe dane źródłowe (w .gitignore)
 ```
@@ -45,21 +46,33 @@ python -m ecosim.cli ingest
 
 # 3. Serwer API (http://127.0.0.1:8000/docs)
 python -m ecosim.cli serve --reload
+
+# 4. Frontend (http://localhost:5173)
+cd frontend; npm install; npm run dev
 ```
+
+Lokalnie aplikacja otwiera się bez logowania. Na serwerze logowanie włącza się, zakładając
+konto (`python -m ecosim.cli auth set-user <nazwa> --role admin|tester`) — patrz
+`deploy/README.md`.
 
 ## Przykładowe zapytania API
 
 ```
 GET /catalog/scenarios
 GET /catalog/tree
-GET /dictionaries/groups
 GET /timeseries?variable=biomass&freq=annual&scenario=baseline_cumulative&group=Cod%20adult
+GET /regions/layers?scenario=ssp1_a002          # obszary referencyjne (ICES, zarządzanie) na siatce modelu
+POST /spatial/zonal                             # zmienna z map w obszarach, rok po roku
 ```
 
 ## Status (roadmap)
 
 - [x] Etap 0 — szkielet, kanoniczny schemat, słowniki
 - [x] Etap 1 — ingestia szeregów czasowych → Parquet + katalog + API
-- [ ] Etap 2 — ingestia przestrzenna (`.asc` → COG) + endpointy map
-- [ ] Etap 3 — framework R (kontrakt, `ecosimkit`, runner, UI analiz)
-- [ ] Etap 4 — hardening na serwer (auth, kolejka, kontenery R)
+- [x] Etap 2 — ingestia przestrzenna (`.asc` → COG) + endpointy map
+- [x] Etap 3 — framework R (kontrakt, `ecosimkit`, runner, UI analiz)
+- [x] Obszary ICES i zarządzania: paczki obszarów, sumy/przecięcia, statystyki w obszarach,
+      analizy R na obszarach (plan `docs/Plans and TO_DO lists/26.11_ICES_obszary_PLAN.md`)
+- [ ] Etap 4 — hardening na serwer: logowanie (admin/tester) i pliki wdrożenia **zrobione**;
+      do zrobienia izolacja skryptów R (do tego czasu R wyłączony na serwerze), kolejka zadań,
+      osobne profile użytkowników

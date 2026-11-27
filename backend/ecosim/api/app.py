@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,7 +51,6 @@ def create_app() -> FastAPI:
             return JSONResponse(status_code=403, content={"detail": "Only the administrator can do this."})
         return await call_next(request)
 
-    @app.on_event("startup")
     def _migrate_store() -> None:
         # One-time, idempotent move from the old single-global-store layout
         # to per-source caching (added 2026-08-28) -- a no-op on every
@@ -69,7 +69,6 @@ def create_app() -> FastAPI:
         except Exception:  # noqa: BLE001 -- best-effort, the previous catalog stays usable
             logging.getLogger("ecosim.activation").exception("Catalog rebuild failed; keeping the previous one.")
 
-    @app.on_event("startup")
     def _identify_models() -> None:
         # Sources identified before identify() learned something new (e.g.
         # Ecopath group names) are identified again -- in the background,
@@ -81,6 +80,14 @@ def create_app() -> FastAPI:
             target=refresh_identification, args=(get_workspace_registry(),), daemon=True,
             name="identify-models",
         ).start()
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        _migrate_store()
+        _identify_models()
+        yield
+
+    app.router.lifespan_context = lifespan
 
     @app.get("/health", tags=["meta"])
     def health() -> dict:

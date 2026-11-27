@@ -34,3 +34,12 @@ import pytest
 @pytest.fixture(autouse=True)
 def _isolated_ecosim_home(tmp_path, monkeypatch):
     monkeypatch.setenv("ECOSIM_CONFIG_DIR", str(tmp_path / "ecosim_home"))
+
+
+@pytest.fixture
+def imported(tmp_path):
+    """The synthetic region pack (regions_helpers.py) imported into the
+    test's profile: (pack, GridContext of its 6x5 EPSG:3035 grid)."""
+    from regions_helpers import import_test_pack
+
+    return import_test_pack(tmp_path)

@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { AreaSummary, RegionLayer } from "../../api/types";
-import { canJoin, describeDefinition, groupIsEmpty } from "./areaModel";
+import { canJoin, describeDefinition, groupIsEmpty, usesLayers } from "./areaModel";
 import type { AreaBuilderState, AreaLibraryState } from "./useAreas";
 
 export type AreaPickerTab = "draw" | "regions";
@@ -67,9 +67,7 @@ export function AreaPicker({
       <div className="aoilist">
         {library.loaded && library.areas.length === 0 && <span className="muted">No saved areas yet.</span>}
         {library.areas.map((a) => {
-          const description = a.area.groups.some((g) => g.some((i) => i.kind === "regions"))
-            ? describeDefinition(a.area, builder.layers)
-            : null;
+          const description = usesLayers(a.area) ? describeDefinition(a.area, builder.layers) : null;
           const usesRegions = description !== null && description !== a.name;
           return (
             <div className="aoilist__entry" key={a.id}>
